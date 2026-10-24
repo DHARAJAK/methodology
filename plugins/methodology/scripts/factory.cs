@@ -89,6 +89,7 @@ void Start(string plan)
 
     var feature = Path.GetFileNameWithoutExtension(plan);
     var branch = $"feat/{feature}";
+    var baseBranch = Git("branch", "--show-current"); // main, master, develop...: whatever the feature starts from
     if (Git("branch", "--list", branch) != "") Die($"branch {branch} already exists. Delete it or rename the plan.");
     Git("switch", "-c", branch);
 
@@ -96,7 +97,7 @@ void Start(string plan)
     {
         ["feature"] = feature, ["plan"] = plan, ["plan_hash"] = FileHash(plan),
         ["plan_commit"] = Git("log", "-1", "--format=%H", "--", plan),
-        ["branch"] = branch, ["status"] = "building", ["started"] = Now(), ["ended"] = null,
+        ["branch"] = branch, ["base"] = baseBranch, ["status"] = "building", ["started"] = Now(), ["ended"] = null,
         ["tasks"] = tasks,
     };
     Save(state);
@@ -221,7 +222,7 @@ void Finish()
     var complexity = Regex.Matches(output, @"CA1502|CA1505|S3776|S1541|cyclomatic|cognitive complexity", RegexOptions.IgnoreCase).Count;
 
     // Dependencies added on this branch that the plan does not name.
-    var depDiff = Git("diff", "main...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
+    var depDiff = Git("diff", $"{BaseOf(state)}...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
     var added = Regex.Matches(depDiff, @"^\+.*(?:PackageReference|PackageVersion)\s+(?:Include|Update)=""([^""]+)""", RegexOptions.Multiline).Select(m => m.Groups[1].Value)
         .Concat(Regex.Matches(depDiff, @"^\+\s*""([@\w./-]+)""\s*:\s*""[\^~]?\d", RegexOptions.Multiline).Select(m => m.Groups[1].Value))
         .Distinct().ToList();
@@ -456,3 +457,6 @@ string Git(params string[] gitArgs)
     p.WaitForExit();
     return (p.ExitCode, stdout.Result + stderr.Result);
 }
+
+// The branch the feature started from (older state files have none: assume main).
+string BaseOf(JsonNode state) => string.IsNullOrEmpty(Str(state, "base")) ? "main" : Str(state, "base");
