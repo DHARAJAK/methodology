@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # /onboard
 
-Run once per repo, before the first `/spec`. `METHODOLOGY_ROOT` (set by the plugin at session start) points to the plugin's files; if it is empty, find the installed `methodology` plugin under `~/.claude/plugins/`. Work through the steps in order.
+Run once per repo, before the first `/spec`. The plugin's files are in `${CLAUDE_PLUGIN_ROOT}`. Work through the steps in order.
 Tell the user what you found at each step in one or two plain sentences.
 **Never fix existing failures here.** Onboarding only records how things are today.
 
@@ -50,16 +50,18 @@ The methodology needs ONE command that runs every standard check and exits non-z
 - If the check cannot run at all (missing SDK, broken build), stop and tell the user what is missing.
 
 ## 5. Safety settings
-- Copy `$METHODOLOGY_ROOT/templates/settings.json` (from the methodology plugin) to `.claude/settings.json` in the repo.
+- Copy `${CLAUDE_PLUGIN_ROOT}/templates/settings.json` (from the methodology plugin) to `.claude/settings.json` in the repo.
 - If the repo already has one, merge: keep every existing rule and add the template's `deny` and `ask` rules. Never remove a rule.
+- The template has every command rule twice, as `Bash(...)` and `PowerShell(...)`, because on Windows Claude Code may run commands through PowerShell. Keep both.
 - Show the user the final `deny` and `ask` lists.
 
 ## 6. Secrets scan at pre-commit
-- Copy `$METHODOLOGY_ROOT/templates/pre-commit` to `.githooks/pre-commit` in the repo, make it executable, and run `git config core.hooksPath .githooks`.
+- Copy `${CLAUDE_PLUGIN_ROOT}/templates/pre-commit` to `.githooks/pre-commit` in the repo, make it executable, and run `git config core.hooksPath .githooks`.
+- Add the line `.githooks/* text eol=lf` to `.gitattributes` (create it if missing), so Windows line endings never break the hook script.
 - Check that `gitleaks` is installed (`gitleaks version`). If it is not, do NOT install it yourself: tell the user how (for example `winget install gitleaks`, `brew install gitleaks`), and note it in the summary.
 
 ## 7. Ignore and commit
-- Add to `.gitignore`: `.factory/state.json`, `.factory/last-check.txt` and `.factory/pr-body.md`. Commit `.factory/config.json`, the baseline files and later `.factory/metrics.jsonl` (numbers only, no code or prompts).
+- Add to `.gitignore`: `.factory/state.json`, `.factory/last-check.txt`, `.factory/pr-body.md` and `.factory/baseline.txt` (the raw output holds local paths and the user name). Commit `.factory/config.json`, `.factory/baseline.json`, `.gitattributes` and later `.factory/metrics.jsonl` (numbers only, no code or prompts).
 - For typed languages (C#, TypeScript, Java, Go...), suggest the user check `/plugin` for a code-intelligence plugin for their language.
 - Commit everything on `chore/onboard` with the message `chore: onboard repo for the methodology`. Do not push.
 

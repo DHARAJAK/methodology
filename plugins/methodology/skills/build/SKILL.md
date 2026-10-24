@@ -9,14 +9,14 @@ argument-hint: "specs/<NNN>-<name>.md"
 
 Build the approved plan `$ARGUMENTS`. You are a thin coordinator: subagents write the code, the factory script decides pass, fail or stop. Keep your own context small: do not read large parts of the code yourself.
 
-The referee is `dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- <command>`, written below as `factory <command>`. `METHODOLOGY_ROOT` is set by the plugin when the session starts; if it is empty, find `scripts/factory.cs` inside the installed `methodology` plugin under `~/.claude/plugins/` and use that path.
+The referee is `dotnet run "${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs" -- <command>`, written below as `factory <command>`. The path is filled in by Claude Code and works in Bash and PowerShell alike.
 
 ## 1. Start
 - Run `factory start $ARGUMENTS`. If it refuses, tell the user why and stop.
 - It creates the branch `feat/<plan>` and lists the tasks. If it says "Resuming", continue with the first task that is not committed (`factory status`).
 
 ## 2. For each task, in order
-1. Launch a **fresh `implementer` subagent** with only: the plan path and the task number.
+1. Launch a **fresh `implementer` subagent** with only: the plan path, the task number, and the referee path `${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs`.
 2. When it reports:
    - **PASS:** run `factory commit <task>`. If the commit is refused (files changed, secrets found), send the problem to a new implementer for the same task.
    - **STOP**, or `factory` exits with code 2: go to step 5 (Needs you). Do not try to fix it yourself.

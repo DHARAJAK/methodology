@@ -51,6 +51,23 @@
             "if": "Bash(git commit *)"
           }
         ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dotnet",
+            "args": [
+              "run",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs",
+              "--",
+              "no-raw-commit"
+            ],
+            "timeout": 60,
+            "if": "PowerShell(git commit *)"
+          }
+        ]
       }
     ],
     "PostToolUse": [
