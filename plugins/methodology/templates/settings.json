@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./secrets/**)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Bash(rm -rf *)",
+      "Bash(npm publish *)",
+      "Bash(dotnet nuget push *)",
+      "Bash(twine upload *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push origin main)",
+      "Bash(git push origin master)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(dotnet add package *)",
+      "Bash(npm install *)",
+      "Bash(npm i *)",
+      "Bash(yarn add *)",
+      "Bash(pnpm add *)",
+      "Bash(pip install *)",
+      "Bash(uv add *)",
+      "Bash(go get *)"
+    ]
+  }
+}

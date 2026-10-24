@@ -1,0 +1,60 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$CLAUDE_ENV_FILE\" ] && echo \"export METHODOLOGY_ROOT=\\\"${CLAUDE_PLUGIN_ROOT}\\\"\" >> \"$CLAUDE_ENV_FILE\"; exit 0"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.factory/config.json\" ]; then dotnet run \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs\" -- lock-specs; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.factory/config.json\" ]; then dotnet run \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs\" -- no-raw-commit; fi",
+            "if": "Bash(git commit *)"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 120,
+            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.factory/config.json\" ]; then dotnet run \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs\" -- format; fi"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.factory/config.json\" ]; then dotnet run \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs\" -- stop; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "methodology",
+  "owner": {
+    "name": "Arthur Wills"
+  },
+  "plugins": [
+    {
+      "name": "methodology",
+      "source": "./plugins/methodology",
+      "description": "Spec-first agentic coding with Claude Code (.NET)."
+    }
+  ]
+}
