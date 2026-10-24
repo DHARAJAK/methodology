@@ -7,6 +7,7 @@
 //                  --no-verify (skipping the secrets scan) is never allowed
 //   format         after an edit: formats the changed .cs file (whitespace only, fast)
 //   stop           when Claude wants to finish: refuses while /build has uncommitted tasks
+//   session-start  sets METHODOLOGY_ROOT for the session
 //
 // Exit 2 = block; the message on stderr is shown to Claude so it can correct course.
 
@@ -16,6 +17,18 @@ using System.Text.RegularExpressions;
 
 var root = Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") ?? Directory.GetCurrentDirectory();
 Directory.SetCurrentDirectory(root);
+
+// session-start: tell later shell commands where the plugin lives (args[1] = plugin root).
+if (args.Length > 1 && args[0] == "session-start")
+{
+    var envFile = Environment.GetEnvironmentVariable("CLAUDE_ENV_FILE");
+    if (!string.IsNullOrEmpty(envFile))
+        File.AppendAllText(envFile, $"export METHODOLOGY_ROOT=\"{args[1].Replace('\\', '/')}\"\n");
+    return 0;
+}
+
+// Every other hook only acts in repos set up with /onboard.
+if (!File.Exists(".factory/config.json")) return 0;
 
 var raw = Console.In.ReadToEnd();
 var input = JsonNode.Parse(string.IsNullOrWhiteSpace(raw) ? "{}" : raw)!;

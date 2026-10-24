@@ -5,7 +5,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$CLAUDE_ENV_FILE\" ] && echo \"export METHODOLOGY_ROOT=\\\"${CLAUDE_PLUGIN_ROOT}\\\"\" >> \"$CLAUDE_ENV_FILE\"; exit 0"
+            "command": "dotnet",
+            "args": [
+              "run",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs",
+              "--",
+              "session-start",
+              "${CLAUDE_PLUGIN_ROOT}"
+            ],
+            "timeout": 120
           }
         ]
       }
@@ -16,8 +24,14 @@
         "hooks": [
           {
             "type": "command",
-            "timeout": 60,
-            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.factory/config.json\" ]; then dotnet run \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs\" -- lock-specs; fi"
+            "command": "dotnet",
+            "args": [
+              "run",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs",
+              "--",
+              "lock-specs"
+            ],
+            "timeout": 60
           }
         ]
       },
@@ -26,8 +40,14 @@
         "hooks": [
           {
             "type": "command",
+            "command": "dotnet",
+            "args": [
+              "run",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs",
+              "--",
+              "no-raw-commit"
+            ],
             "timeout": 60,
-            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.factory/config.json\" ]; then dotnet run \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs\" -- no-raw-commit; fi",
             "if": "Bash(git commit *)"
           }
         ]
@@ -39,8 +59,14 @@
         "hooks": [
           {
             "type": "command",
-            "timeout": 120,
-            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.factory/config.json\" ]; then dotnet run \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs\" -- format; fi"
+            "command": "dotnet",
+            "args": [
+              "run",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs",
+              "--",
+              "format"
+            ],
+            "timeout": 120
           }
         ]
       }
@@ -50,8 +76,14 @@
         "hooks": [
           {
             "type": "command",
-            "timeout": 60,
-            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.factory/config.json\" ]; then dotnet run \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs\" -- stop; fi"
+            "command": "dotnet",
+            "args": [
+              "run",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs",
+              "--",
+              "stop"
+            ],
+            "timeout": 60
           }
         ]
       }
