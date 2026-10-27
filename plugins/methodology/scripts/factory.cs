@@ -106,7 +106,11 @@ void Start(string plan)
 
     var feature = Path.GetFileNameWithoutExtension(plan);
     var branch = $"feat/{feature}";
-    var baseBranch = Git("branch", "--show-current"); // main, master, develop...: whatever the feature starts from
+    // The feature must start from the configured base branch, or the PR/MR would carry unrelated commits.
+    var current = Git("branch", "--show-current");
+    var configBase = Str(LoadJson(ConfigPath, "Run /onboard first."), "base");
+    if (configBase != "" && current != configBase) Die($"you are on '{current}'. Switch to the base branch '{configBase}' (and pull) first.");
+    var baseBranch = configBase != "" ? configBase : current; // main, master, develop...: whatever the feature starts from
     if (Git("branch", "--list", branch) != "") Die($"branch {branch} already exists. Delete it or rename the plan.");
     Git("switch", "-c", branch);
 
@@ -314,7 +318,7 @@ void Finish()
     var complexity = Regex.Matches(output, @"CA1502|CA1505|S3776|S1541|cyclomatic|cognitive complexity", RegexOptions.IgnoreCase).Count;
 
     // Dependencies added on this branch that the plan does not name.
-    var depDiff = Git("diff", $"{StartedFrom(state)}...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
+    var depDiff = Git("diff", $"{BaseOf(config, state)}...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
     var added = Regex.Matches(depDiff, @"^\+.*(?:PackageReference|PackageVersion)\s+(?:Include|Update)=""([^""]+)""", RegexOptions.Multiline).Select(m => m.Groups[1].Value)
         .Concat(Regex.Matches(depDiff, @"^\+\s*""([@\w./-]+)""\s*:\s*""[\^~]?\d", RegexOptions.Multiline).Select(m => m.Groups[1].Value))
         .Distinct().ToList();
@@ -379,7 +383,7 @@ void OpenPr(bool dryRun)
 
     var config = LoadJson(ConfigPath, "Run /onboard first.");
     var host = HostOf(config);
-    var baseBranch = BaseOf(config);
+    var baseBranch = BaseOf(config, state);
     var branch = Str(state, "branch");
     var planPath = Str(state, "plan");
     var planTitle = File.Exists(planPath) ? Regex.Match(File.ReadAllText(planPath), @"^#\s*Plan:\s*(.+?)\s*$", RegexOptions.Multiline).Groups[1].Value : "";
@@ -458,7 +462,11 @@ string HostOf(JsonNode config)
     return code == 0 && url.Contains("gitlab", StringComparison.OrdinalIgnoreCase) ? "gitlab" : "github";
 }
 
-string BaseOf(JsonNode config) => Str(config, "base") is { Length: > 0 } baseBranch ? baseBranch : "main";
+// The branch PRs/MRs target: "base" in config, else the branch the feature started from, else main.
+string BaseOf(JsonNode config, JsonNode state) =>
+    Str(config, "base") is { Length: > 0 } fromConfig ? fromConfig
+    : Str(state, "base") is { Length: > 0 } fromState ? fromState
+    : "main";
 
 // A repo folder named in config, such as "docs/specs/", as "docs/specs".
 string Folder(JsonNode config, string key, string fallback) =>
@@ -649,6 +657,3 @@ string Git(params string[] gitArgs)
     p.WaitForExit();
     return (p.ExitCode, stdout.Result + stderr.Result);
 }
-
-// The branch the feature started from (older state files have none: assume main).
-string StartedFrom(JsonNode state) => string.IsNullOrEmpty(Str(state, "base")) ? "main" : Str(state, "base");
