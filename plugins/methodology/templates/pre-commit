@@ -1,4 +1,12 @@
 #!/bin/sh
+# During /build only the referee may commit: "factory commit" sets FACTORY_COMMIT=1 after the task passed its
+# check (and review). Git runs this hook however the commit was started, so wrappers such as "cmd /c git commit"
+# or "git -C . commit" cannot get around the Claude Code hook that blocks raw commits.
+if [ -f .factory/state.json ] && grep -q '"status": "building"' .factory/state.json && [ "$FACTORY_COMMIT" != "1" ]; then
+  echo "pre-commit: a /build is in progress. Commit only through the referee: factory commit <task>." >&2
+  exit 1
+fi
+
 # Secrets scan before every commit (ADR-008). Blocks the commit if a secret is found.
 if ! command -v gitleaks >/dev/null 2>&1; then
   echo "pre-commit: gitleaks is not installed, so the secrets scan was skipped." >&2

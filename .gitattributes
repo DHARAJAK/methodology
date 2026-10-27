@@ -1,0 +1,3 @@
+# Check out text files with LF on every platform. The pre-commit template is a shell script copied into
+# repos by /onboard; with CRLF (core.autocrlf=true on Windows) its "#!/bin/sh" line breaks.
+* text=auto eol=lf

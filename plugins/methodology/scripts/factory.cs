@@ -5,11 +5,18 @@
 // failures, and refuses to commit work that has not passed the check.
 //
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- start  specs/001-cart.md
-//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- check  1 --test "dotnet test --filter Scenario_AddBook"
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- red    1 --test "dotnet test --filter AddBook" (must FAIL: test first)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- red    1 --skip "docs only"           (task needs no test)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- check  1 --test "dotnet test --filter AddBook"
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- review 1 --pass | --fail "findings" (when config names a reviewer)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- commit 1 -m "add-to-cart button"
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- status
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- stop "reason" (Code Evaluation failed: hand back to you)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- finish        (end of feature: metrics + PR body)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
+//
+// .factory/config.json: "check" (required), "reviewer" (agent name), "host" ("gitlab" | "github", default
+// from the origin URL), "base" (branch PRs/MRs target, default "main").
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- report [days] (summary for the 2-weekly review)
 //
 // Exit codes: 0 = ok, 1 = failed (rework allowed), 2 = STOP (needs you).
@@ -38,10 +45,13 @@ if (args.Length == 0) Usage();
 switch (args[0])
 {
     case "start": if (args.Length < 2) Usage(); Start(args[1]); break;
+    case "red": if (args.Length < 2) Usage(); Red(args[1], Option("--test"), Option("--skip")); break;
     case "check": if (args.Length < 2) Usage(); Check(args[1], Option("--test")); break;
+    case "review": if (args.Length < 2) Usage(); Review(args[1], args.Contains("--pass"), Option("--fail")); break;
     case "commit": if (args.Length < 2) Usage(); Commit(args[1], Option("-m")); break;
     case "status": Status(); break;
     case "finish": Finish(); break;
+    case "open-pr": OpenPr(args.Contains("--dry-run")); break;
     case "stop": StopCommand(args.Length > 1 ? args[1] : "stopped by /build"); break;
     case "report": Report(args.Length > 1 && int.TryParse(args[1], out var d) ? d : 14); break;
     default: Usage(); break;
@@ -82,8 +92,12 @@ void Start(string plan)
     foreach (Match m in Regex.Matches(text, @"^###\s*Task\s+(\d+)\s*:\s*(.+?)\s*$", RegexOptions.Multiline))
         tasks.Add(new JsonObject
         {
-            ["id"] = m.Groups[1].Value, ["name"] = m.Groups[2].Value, ["status"] = "pending",
-            ["attempts"] = 0, ["started"] = null, ["ended"] = null,
+            ["id"] = m.Groups[1].Value,
+            ["name"] = m.Groups[2].Value,
+            ["status"] = "pending",
+            ["attempts"] = 0,
+            ["started"] = null,
+            ["ended"] = null,
         });
     if (tasks.Count == 0) Die("no tasks found. Tasks must be headed '### Task 1: <name>'.");
 
@@ -95,7 +109,9 @@ void Start(string plan)
 
     var state = new JsonObject
     {
-        ["feature"] = feature, ["plan"] = plan, ["plan_hash"] = FileHash(plan),
+        ["feature"] = feature,
+        ["plan"] = plan,
+        ["plan_hash"] = FileHash(plan),
         ["plan_commit"] = Git("log", "-1", "--format=%H", "--", plan),
         ["branch"] = branch, ["base"] = baseBranch, ["status"] = "building", ["started"] = Now(), ["ended"] = null,
         ["tasks"] = tasks,
@@ -105,6 +121,31 @@ void Start(string plan)
     foreach (var t in tasks) Console.WriteLine($"  Task {Str(t!, "id")}: {Str(t!, "name")}");
 }
 
+// Test first: the task's new tests must fail before any code is written, or they do not test the new behaviour.
+void Red(string taskId, string? testCmd, string? skipReason)
+{
+    var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
+    if (Str(state, "status") != "building") Die($"feature is {Str(state, "status")}, not building.", 2);
+    if (!PlanUnchanged(state)) Stop(state, "the plan changed during the build. Rerun /spec.");
+    var task = FindTask(state, taskId);
+    if (Str(task, "status") == "committed") Die($"task {taskId} is already committed.");
+
+    if (skipReason != null)
+    {
+        task["red"] = new JsonObject { ["at"] = Now(), ["skipped"] = skipReason };
+        Save(state);
+        Console.WriteLine($"Task {taskId}: no test, recorded as skipped ({skipReason}). Now run: factory check {taskId}");
+        return;
+    }
+    if (testCmd == null) Die("red needs --test \"<command for the new tests>\", or --skip \"<reason>\" for a task with no test.");
+
+    var (code, _) = Shell(testCmd);
+    if (code == 0) Die("the tests passed before the code was written, so they do not test the new behaviour. Write a test that fails first.");
+    task["red"] = new JsonObject { ["at"] = Now(), ["test"] = testCmd };
+    Save(state);
+    Console.WriteLine($"RED: task {taskId} has a failing test. Write the code, then run: factory check {taskId} --test \"{testCmd}\"");
+}
+
 void Check(string taskId, string? testCmd)
 {
     var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
@@ -112,6 +153,9 @@ void Check(string taskId, string? testCmd)
     if (!PlanUnchanged(state)) Stop(state, "the plan changed during the build. Rerun /spec.");
     var task = FindTask(state, taskId);
     if (Str(task, "status") == "committed") Die($"task {taskId} is already committed.");
+    if (task["red"] == null)
+        Die($"task {taskId} has no failing test on record. Test first: run 'factory red {taskId} --test \"<cmd>\"' before writing code.");
+    task["review"] = null;
 
     var attempts = task["attempts"]!.GetValue<int>() + 1;
     task["attempts"] = attempts;
@@ -131,10 +175,16 @@ void Check(string taskId, string? testCmd)
     else
     {
         var baseline = File.Exists(BaselinePath) ? ProblemLines(File.ReadAllText(BaselinePath)) : new HashSet<string>();
-        var newProblems = ProblemLines(output).Except(baseline).OrderBy(x => x).ToList();
+        var problems = ProblemLines(output);
+        var newProblems = problems.Except(baseline).OrderBy(x => x).ToList();
         if (newProblems.Count > 0)
             output += "\n--- NEW problems (not in baseline) ---\n" + string.Join("\n", newProblems);
-        results.Add(("check vs baseline", newProblems.Count == 0, output));
+        // A check that fails without printing any recognisable problem (for example, it could not start)
+        // must never count as a pass, or a broken check command would let every task through.
+        var unrecognisedFailure = problems.Count == 0;
+        if (unrecognisedFailure)
+            output += $"\n--- The check exited with code {code} but printed no recognisable problem. Treated as a failure. ---";
+        results.Add(("check vs baseline", newProblems.Count == 0 && !unrecognisedFailure, output));
     }
 
     File.WriteAllText(LastCheckPath, string.Join("\n\n", results.Select(r => $"===== {r.Name} =====\n{r.Output}")));
@@ -158,12 +208,47 @@ void Check(string taskId, string? testCmd)
     Environment.Exit(1);
 }
 
+// Records the project reviewer's verdict on a task that passed the check. A failed review counts as an attempt.
+void Review(string taskId, bool pass, string? findings)
+{
+    var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
+    var task = FindTask(state, taskId);
+    if (Str(task, "status") != "passed") Die($"task {taskId} has not passed the check (status: {Str(task, "status")}). Review comes after a passing check.");
+    if (!pass && findings == null) Die("review needs --pass, or --fail \"<findings>\".");
+
+    if (pass)
+    {
+        task["review"] = new JsonObject { ["result"] = "pass", ["at"] = Now(), ["fingerprint"] = TreeFingerprint() };
+        Save(state);
+        Console.WriteLine($"Review passed for task {taskId}. Now run: factory commit {taskId}");
+        return;
+    }
+
+    task["review_findings"] = (task["review_findings"]?.GetValue<int>() ?? 0) + 1;
+    task["status"] = "failed";
+    var attempts = task["attempts"]!.GetValue<int>();
+    if (attempts >= MaxAttempts) Stop(state, $"task {taskId} failed review on attempt {attempts}: {findings}");
+    Save(state);
+    Console.WriteLine($"REVIEW FAILED: task {taskId}, attempt {attempts} of {MaxAttempts}. Send the findings to a new implementer:");
+    Console.WriteLine(findings);
+    Environment.Exit(1);
+}
+
 void Commit(string taskId, string? message)
 {
     var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
     var task = FindTask(state, taskId);
     if (Str(task, "status") != "passed")
         Die($"task {taskId} has not passed the check (status: {Str(task, "status")}). Refusing to commit.");
+    var reviewer = Str(LoadJson(ConfigPath, "Run /onboard first."), "reviewer");
+    if (reviewer != "")
+    {
+        var review = task["review"];
+        if (review == null || Str(review, "result") != "pass")
+            Die($"task {taskId} has not passed review by '{reviewer}'. Run the reviewer, then 'factory review {taskId} --pass'.");
+        if (Str(review, "fingerprint") != TreeFingerprint())
+            Die("files changed after the review. Run the check and the review again.");
+    }
     if (TreeFingerprint() != Str(task, "fingerprint"))
     {
         task["status"] = "failed";
@@ -246,6 +331,8 @@ void Finish()
         ["new_problems"] = newProblems,
         ["complexity_warnings"] = complexity,
         ["done_when_coverage"] = Ratio(committed.Count(t => t["has_test"]?.GetValue<bool>() == true), tasks.Count),
+        ["test_first_rate"] = Ratio(committed.Count(t => t["red"]?["test"] != null), tasks.Count),
+        ["review_findings"] = tasks.Sum(t => t["review_findings"]?.GetValue<int>() ?? 0),
         ["secrets_caught"] = state["secrets_caught"]?.GetValue<int>() ?? 0,
         ["unapproved_deps"] = unapproved.Count,
         ["tokens_total"] = tokensTotal,
@@ -273,6 +360,42 @@ void Finish()
     Console.WriteLine($"Metrics appended to {MetricsPath}. PR body written to {PrBodyPath}.");
 }
 
+// Opens a GitHub pull request or GitLab merge request from the feature branch into the base branch.
+// The CLI gets its arguments as a list, so the multi-line body needs no shell quoting.
+void OpenPr(bool dryRun)
+{
+    var state = LoadJson(StatePath, "No build to open.");
+    if (Str(state, "status") != "finished") Die($"feature is {Str(state, "status")}; open-pr runs after 'factory finish' on a completed build.");
+    if (!File.Exists(PrBodyPath)) Die($"{PrBodyPath} not found. Run 'factory finish' first.");
+    var body = File.ReadAllText(PrBodyPath);
+    if (body.Contains("<filled in by /build>")) Die($"fill in the Code Evaluation section of {PrBodyPath} first.");
+
+    var config = LoadJson(ConfigPath, "Run /onboard first.");
+    var host = HostOf(config);
+    var baseBranch = BaseOf(config);
+    var branch = Str(state, "branch");
+    var planPath = Str(state, "plan");
+    var planTitle = File.Exists(planPath) ? Regex.Match(File.ReadAllText(planPath), @"^#\s*Plan:\s*(.+?)\s*$", RegexOptions.Multiline).Groups[1].Value : "";
+    var title = planTitle != "" ? planTitle : Str(state, "feature");
+
+    var (cli, cliArgs) = host == "gitlab"
+        ? ("glab", new[] { "mr", "create", "--source-branch", branch, "--target-branch", baseBranch, "--title", title, "--description", body, "--yes" })
+        : ("gh", new[] { "pr", "create", "--head", branch, "--base", baseBranch, "--title", title, "--body-file", PrBodyPath });
+    Console.WriteLine($"{host}: {cli} {string.Join(' ', cliArgs.Select(a => a == body ? "<pr-body.md>" : a.Contains(' ') ? $"\"{a}\"" : a))}");
+    if (dryRun) return;
+
+    try
+    {
+        var (code, output) = Run(cli, cliArgs);
+        Console.WriteLine(output.Trim());
+        if (code != 0) Die($"{cli} failed. Is it signed in (`{cli} auth login`) and is the branch pushed?");
+    }
+    catch (System.ComponentModel.Win32Exception)
+    {
+        Die($"{cli} is not installed. Install it, sign in with `{cli} auth login`, then run open-pr again.");
+    }
+}
+
 void Report(int days)
 {
     if (!File.Exists(MetricsPath)) Die("no metrics yet. They appear after the first 'factory finish'.");
@@ -283,7 +406,8 @@ void Report(int days)
     double Avg(string k) => rows.Where(r => r[k] != null).Select(r => r[k]!.GetValue<double>()).DefaultIfEmpty(0).Average();
     double Sum(string k) => rows.Where(r => r[k] != null).Select(r => r[k]!.GetValue<double>()).Sum();
     var medianHours = rows.Select(r => r["spec_to_pr_hours"]!.GetValue<double>()).OrderBy(x => x).ElementAt(rows.Count / 2);
-    var (_, escaped) = Shell("gh issue list --label escaped --state all --search \"created:>=" + since + "\" --json number --jq length");
+    var config = LoadJson(ConfigPath, "Run /onboard first.");
+    var escaped = EscapedBugs(config, since);
     var reverts = Git("log", $"--since={since}", "--grep=^Revert", "--oneline").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
 
     Console.WriteLine($"Last {days} days · {rows.Count} features · {Sum("tasks")} tasks");
@@ -295,7 +419,9 @@ void Report(int days)
     Console.WriteLine($"new problems         {Sum("new_problems")}");
     Console.WriteLine($"complexity warnings  {Sum("complexity_warnings")}");
     Console.WriteLine($"done-when coverage   {Avg("done_when_coverage"):P0}");
-    Console.WriteLine($"escaped bugs         {(int.TryParse(escaped.Trim(), out var e) ? e.ToString() : "n/a (needs gh)")}");
+    Console.WriteLine($"test-first rate      {Avg("test_first_rate"):P0}");
+    Console.WriteLine($"review findings      {Sum("review_findings")}");
+    Console.WriteLine($"escaped bugs         {escaped?.ToString() ?? $"n/a (needs {(HostOf(config) == "gitlab" ? "glab" : "gh")}, signed in)"}");
     Console.WriteLine($"reverts              {reverts}");
     Console.WriteLine($"secrets caught       {Sum("secrets_caught")}");
     Console.WriteLine($"unapproved deps      {Sum("unapproved_deps")}");
@@ -316,6 +442,47 @@ void Status()
 // ---------- helpers ----------
 
 double Ratio(int part, int whole) => whole == 0 ? 0 : Math.Round((double)part / whole, 2);
+
+string HostOf(JsonNode config)
+{
+    var host = Str(config, "host");
+    if (host != "") return host;
+    var (code, url) = Run("git", new[] { "remote", "get-url", "origin" });
+    return code == 0 && url.Contains("gitlab", StringComparison.OrdinalIgnoreCase) ? "gitlab" : "github";
+}
+
+string BaseOf(JsonNode config) => Str(config, "base") is { Length: > 0 } baseBranch ? baseBranch : "main";
+
+// "group/sub/project" from an https or ssh origin URL, for GitLab API calls.
+string? ProjectPath()
+{
+    var (code, output) = Run("git", new[] { "remote", "get-url", "origin" });
+    if (code != 0) return null;
+    var url = output.Trim();
+    var path = url.StartsWith("git@") ? url[(url.IndexOf(':') + 1)..] : new Uri(url).AbsolutePath.TrimStart('/');
+    return path.EndsWith(".git") ? path[..^4] : path;
+}
+
+// Issues labelled "escaped" (bugs found after merge) created since the date, or null if the host CLI is unavailable.
+int? EscapedBugs(JsonNode config, string since)
+{
+    try
+    {
+        if (HostOf(config) == "gitlab")
+        {
+            var project = ProjectPath();
+            if (project == null) return null;
+            var (code, output) = Run("glab", new[] { "api", $"projects/{Uri.EscapeDataString(project)}/issues?labels=escaped&scope=all&created_after={since}T00:00:00Z&per_page=100" });
+            return code == 0 ? JsonNode.Parse(output)?.AsArray().Count : null;
+        }
+        var (ghCode, ghOutput) = Run("gh", new[] { "issue", "list", "--label", "escaped", "--state", "all", "--search", $"created:>={since}", "--json", "number", "--jq", "length" });
+        return ghCode == 0 && int.TryParse(ghOutput.Trim(), out var count) ? count : null;
+    }
+    catch (System.ComponentModel.Win32Exception)
+    {
+        return null;
+    }
+}
 
 // Sums token usage from Claude Code's local session logs for this repo since the build started.
 // Logs live in ~/.claude/projects/<repo path with non-alphanumerics as '-'>/**/*.jsonl.
@@ -359,7 +526,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | check <task> [--test \"cmd\"] | commit <task> [-m \"msg\"] | status | stop "reason" | finish | report [days]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | report [days]");
     Environment.Exit(1);
 }
 
@@ -439,15 +606,26 @@ string Git(params string[] gitArgs)
     return output.Trim();
 }
 
-(int, string) Shell(string command) => OperatingSystem.IsWindows()
-    ? Run("cmd.exe", new[] { "/c", command })
-    : Run("/bin/sh", new[] { "-c", command });
+(int, string) Shell(string command)
+{
+    if (!OperatingSystem.IsWindows()) return Run("/bin/sh", new[] { "-c", command });
+
+    // cmd.exe cannot run a PowerShell script such as "./scripts/verify.ps1", so run .ps1 checks with PowerShell.
+    var script = Regex.Match(command, @"^\s*""?(?<path>[^""\s]+\.ps1)""?(?<rest>.*)$", RegexOptions.IgnoreCase);
+    if (!script.Success) return Run("cmd.exe", new[] { "/c", command });
+
+    var psArgs = new List<string> { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script.Groups["path"].Value };
+    psArgs.AddRange(script.Groups["rest"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    return Run("powershell.exe", psArgs);
+}
 
 (int, string) Run(string file, IEnumerable<string> argList, Dictionary<string, string>? env = null)
 {
     var psi = new ProcessStartInfo(file)
     {
-        RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
     };
     foreach (var a in argList) psi.ArgumentList.Add(a);
     if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;

@@ -1,6 +1,6 @@
 ---
 name: build
-description: Build an approved plan task by task with fresh subagents, the factory referee and hooks, then evaluate the whole feature and open a pull request.
+description: Build an approved plan task by task with fresh subagents, the factory referee and hooks, then evaluate the whole feature and open a pull request (GitHub) or merge request (GitLab).
 disable-model-invocation: true
 argument-hint: "specs/<NNN>-<name>.md"
 ---
@@ -18,7 +18,11 @@ The referee is `dotnet run "${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs" -- <comman
 ## 2. For each task, in order
 1. Launch a **fresh `implementer` subagent** with only: the plan path, the task number, and the referee path `${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs`.
 2. When it reports:
-   - **PASS:** run `factory commit <task>`. If the commit is refused (files changed, secrets found), send the problem to a new implementer for the same task.
+   - **PASS**, and `.factory/config.json` names a `reviewer` agent: launch that agent (fresh, read-only) on the task's uncommitted changes (`git diff HEAD` plus new files) with the plan path and task number. It checks the project's own rules. Then record its verdict:
+     - no real problems: `factory review <task> --pass`, then `factory commit <task>`.
+     - real problems: `factory review <task> --fail "<one-line summary>"`, and send the findings to a **new** implementer for the same task. If `factory` exits with code 2, go to step 5.
+   - **PASS** and no `reviewer` configured: run `factory commit <task>`.
+   - If the commit is refused (files changed, secrets found), send the problem to a new implementer for the same task.
    - **STOP**, or `factory` exits with code 2: go to step 5 (Needs you). Do not try to fix it yourself.
 3. Tell the user one line per task: "Task 2 of 5 done (attempt 1)."
 
