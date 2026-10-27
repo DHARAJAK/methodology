@@ -7,7 +7,8 @@ argument-hint: "<the idea in 2-3 lines>"
 
 # /spec
 
-Turn the idea in `$ARGUMENTS` into an approved, committed plan in `specs/`.
+Turn the idea in `$ARGUMENTS` into an approved, committed plan.
+**Folders:** plans go in the `specs` folder and ADRs in the `adrs` folder named in `.factory/config.json` (defaults `specs/` and `docs/adr/`). Below they are written `<specs>/` and `<adrs>/`.
 **You are read-only until step 5.** Read code freely, but do not create or change any file before the plan is approved.
 
 ## 0. Check the size first
@@ -15,7 +16,7 @@ If the idea is a tiny change, a single bug, or a medium change with an obvious a
 
 ## 1. Idea
 - Restate the idea in 2-3 lines and ask the user to confirm.
-- Use the Explore subagent to read the relevant code, `CLAUDE.md` and `docs/adr/`, so your questions are informed and the plan respects existing decisions.
+- Use the Explore subagent to read the relevant code, `CLAUDE.md` and `<adrs>/`, so your questions are informed and the plan respects existing decisions.
 
 ## 2. Interview (about 10 questions max)
 - Ask ONE question at a time. Offer 2-4 likely answers plus "other" when you can.
@@ -36,7 +37,7 @@ If the idea is a tiny change, a single bug, or a medium change with an obvious a
 
 ## 5. Record
 Only now may you write files:
-- Save the plan to `specs/<NNN>-<short-name>.md` (next free number), with `Status: Approved <YYYY-MM-DD>`.
-- For each decision the plan lists, write an ADR in `docs/adr/` using the next free number (create the folder and an index if missing).
+- Save the plan to `<specs>/<NNN>-<short-name>.md` (next free number), with `Status: Approved <YYYY-MM-DD>`.
+- For each decision the plan lists, write an ADR in `<adrs>/` using the next free number. Follow the format and index in that folder's README if it has one; otherwise create the folder and an index.
 - Commit only those files: `spec: <short-name>`. Do not start building.
-- Tell the user: "Plan approved and committed. Run `/build specs/<file>` when ready." After approval the plan is locked: changing it means running `/spec` again.
+- Tell the user: "Plan approved and committed. Run `/build <specs>/<file>` when ready." After approval the plan is locked: changing it means running `/spec` again.

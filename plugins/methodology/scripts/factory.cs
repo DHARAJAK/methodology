@@ -16,7 +16,8 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
 //
 // .factory/config.json: "check" (required), "reviewer" (agent name), "host" ("gitlab" | "github", default
-// from the origin URL), "base" (branch PRs/MRs target, default "main").
+// from the origin URL), "base" (branch PRs/MRs target, default "main"), "specs" (plan folder, default
+// "specs"), "adrs" (ADR folder for /spec and /build, default "docs/adr").
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- report [days] (summary for the 2-weekly review)
 //
 // Exit codes: 0 = ok, 1 = failed (rework allowed), 2 = STOP (needs you).
@@ -68,7 +69,9 @@ void Start(string plan)
         Die("plan is not approved. Run /spec and approve it first.");
     if (Git("ls-files", plan) == "" || Git("status", "--porcelain", "--", plan) != "")
         Die("plan has uncommitted changes. An approved plan must be committed as-is.");
-    LoadJson(ConfigPath, "Run /onboard first.");
+    var specs = Folder(LoadJson(ConfigPath, "Run /onboard first."), "specs", "specs");
+    if (!RepoPath(plan).StartsWith(specs + "/"))
+        Die($"plans live in {specs}/ (\"specs\" in {ConfigPath}), where the hooks lock them during /build. Move the plan there.");
 
     if (File.Exists(StatePath))
     {
@@ -113,7 +116,11 @@ void Start(string plan)
         ["plan"] = plan,
         ["plan_hash"] = FileHash(plan),
         ["plan_commit"] = Git("log", "-1", "--format=%H", "--", plan),
-        ["branch"] = branch, ["base"] = baseBranch, ["status"] = "building", ["started"] = Now(), ["ended"] = null,
+        ["branch"] = branch,
+        ["base"] = baseBranch,
+        ["status"] = "building",
+        ["started"] = Now(),
+        ["ended"] = null,
         ["tasks"] = tasks,
     };
     Save(state);
@@ -307,7 +314,7 @@ void Finish()
     var complexity = Regex.Matches(output, @"CA1502|CA1505|S3776|S1541|cyclomatic|cognitive complexity", RegexOptions.IgnoreCase).Count;
 
     // Dependencies added on this branch that the plan does not name.
-    var depDiff = Git("diff", $"{BaseOf(state)}...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
+    var depDiff = Git("diff", $"{StartedFrom(state)}...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
     var added = Regex.Matches(depDiff, @"^\+.*(?:PackageReference|PackageVersion)\s+(?:Include|Update)=""([^""]+)""", RegexOptions.Multiline).Select(m => m.Groups[1].Value)
         .Concat(Regex.Matches(depDiff, @"^\+\s*""([@\w./-]+)""\s*:\s*""[\^~]?\d", RegexOptions.Multiline).Select(m => m.Groups[1].Value))
         .Distinct().ToList();
@@ -452,6 +459,13 @@ string HostOf(JsonNode config)
 }
 
 string BaseOf(JsonNode config) => Str(config, "base") is { Length: > 0 } baseBranch ? baseBranch : "main";
+
+// A repo folder named in config, such as "docs/specs/", as "docs/specs".
+string Folder(JsonNode config, string key, string fallback) =>
+    Str(config, key).Replace('\\', '/').Trim('/') is { Length: > 0 } folder ? folder : fallback;
+
+// A path relative to the repo root with forward slashes, however it was typed.
+string RepoPath(string path) => Path.GetRelativePath(Directory.GetCurrentDirectory(), Path.GetFullPath(path)).Replace('\\', '/');
 
 // "group/sub/project" from an https or ssh origin URL, for GitLab API calls.
 string? ProjectPath()
@@ -637,4 +651,4 @@ string Git(params string[] gitArgs)
 }
 
 // The branch the feature started from (older state files have none: assume main).
-string BaseOf(JsonNode state) => string.IsNullOrEmpty(Str(state, "base")) ? "main" : Str(state, "base");
+string StartedFrom(JsonNode state) => string.IsNullOrEmpty(Str(state, "base")) ? "main" : Str(state, "base");

@@ -26,9 +26,18 @@ if ($onWindows) {
 Set-Content .factory/baseline.txt 'old: error in legacy.cs line 12' -Encoding ascii
 Set-Content .gitignore ".factory/state.json`n.factory/last-check.txt" -Encoding ascii
 Set-Content specs/001-cart.md "# Plan: cart`nStatus: Approved 2026-10-23`n## Tasks`n### Task 1: add button`n### Task 2: show total" -Encoding ascii
+New-Item -ItemType Directory docs | Out-Null
+Copy-Item specs/001-cart.md docs/001-cart.md
 git add -A; git commit -qm init
 
-function F { & dotnet run .factory/factory.cs -- @args | Out-Host; return $LASTEXITCODE }
+# A referee that does not compile also exits 1, so report it as its own code or it would pass every "refuses" check.
+function F {
+    $out = & dotnet run .factory/factory.cs -- @args 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    Write-Host $out.TrimEnd()
+    if ($out -match 'The build failed') { return 'build-failed' }
+    return $code
+}
 function ExpectOutput($name, [string[]]$fargs, $pattern) {
     $out = & dotnet run .factory/factory.cs -- @fargs 2>&1 | Out-String
     if ($out -match $pattern) { Write-Host "PASS  $name" -ForegroundColor Green }
@@ -39,6 +48,11 @@ function Expect($name, $actual, $expected) {
     else { Write-Host "FAIL  $name (exit $actual, expected $expected)" -ForegroundColor Red; $script:bad++ }
 }
 
+Expect "refuses a plan outside specs folder" (F start docs/001-cart.md) 1
+$config = Get-Content .factory/config.json -Raw
+Set-Content .factory/config.json ($config.Replace('}', ', "specs": "docs/"}')) -Encoding ascii -NoNewline
+Expect "specs folder is configurable"        (F start specs/001-cart.md) 1
+git checkout -q -- .factory/config.json
 Expect "start creates the branch"            (F start specs/001-cart.md) 0
 Expect "refuses commit before a pass"        (F commit 1) 1
 Expect "refuses check before a failing test" (F check 1) 1

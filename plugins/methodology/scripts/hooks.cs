@@ -2,7 +2,8 @@
 // Claude Code hooks for the methodology (ADR-006, ADR-010).
 // Claude Code runs these automatically; Claude cannot skip them.
 //
-//   lock-specs     before an edit: during /build, the plan (specs/) and .factory/ are read-only
+//   lock-specs     before an edit: during /build, the plan folder ("specs" in .factory/config.json,
+//                  default specs/), the plan being built and .factory/ are read-only
 //   no-raw-commit  before a git commit: during /build, only "factory commit" may commit;
 //                  --no-verify (skipping the secrets scan) is never allowed
 //   format         after an edit: formats the changed .cs file (whitespace only, fast)
@@ -34,8 +35,12 @@ if (!File.Exists(".factory/config.json")) return 0;
 var hook = args.Length > 0 ? args[0] : "";
 JsonNode input;
 JsonNode? state;
+string specs;
 try
 {
+    // The plan folder from config ("specs", default "specs"), as "docs/specs" however it was written.
+    var configured = JsonNode.Parse(File.ReadAllText(".factory/config.json"))?["specs"]?.GetValue<string>();
+    specs = string.IsNullOrWhiteSpace(configured) ? "specs" : configured.Replace('\\', '/').Trim('/');
     // Read stdin as UTF-8: the console's default code page garbles a byte-order mark and non-ASCII paths.
     using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
     var raw = stdin.ReadToEnd();
@@ -56,7 +61,7 @@ switch (hook)
     case "lock-specs":
         {
             var rel = RelativePath(input["tool_input"]?["file_path"]?.GetValue<string>());
-            if (building && rel.StartsWith("specs/"))
+            if (building && (rel.StartsWith(specs + "/") || rel != "" && rel == RelativePath(state?["plan"]?.GetValue<string>())))
                 Block("The approved plan is locked during /build. If the plan is wrong, stop and tell the user to rerun /spec.");
             if (building && rel.StartsWith(".factory/"))
                 Block("Files in .factory/ belong to the factory script. Do not edit them; use the factory commands.");
