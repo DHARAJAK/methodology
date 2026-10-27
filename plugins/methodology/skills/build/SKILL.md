@@ -32,7 +32,7 @@ Never edit code yourself, never commit with git directly, never change the plan.
 When `factory commit` says "All tasks done":
 1. **Plan coverage:** every task in the plan is committed and every Given/When/Then has a test. The end-to-end check in the plan: run it if it can be run automatically, otherwise list it for the user's `/verify`.
 2. **Review:** run the `/code-review` skill on this branch against the base branch (`base` in `.factory/config.json`, otherwise `base` in `.factory/state.json`). Only correctness problems and requirement gaps count, not style.
-3. **ADR gaps:** list new dependencies or new patterns in the diff that no ADR in `docs/adr/` covers. For each, write a short ADR with `Status: Proposed` in `docs/adr/` and commit them: `git commit -m "docs: proposed ADRs"`. The user accepts or rejects them in the PR.
+3. **ADR gaps:** list new dependencies or new patterns in the diff that no ADR in the `adrs` folder covers (`.factory/config.json`, default `docs/adr/`). For each, write a short ADR with `Status: Proposed` there, in that folder's format, and commit them: `git commit -m "docs: proposed ADRs"`. The user accepts or rejects them in the PR.
 4. If the review found a real correctness problem or a requirement gap: run `factory stop "<one-line reason>"`, then go to step 5 (Needs you) with the findings. Do not fix it in this run.
 
 ## 4. Pull request (Done)
