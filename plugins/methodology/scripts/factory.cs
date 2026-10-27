@@ -82,8 +82,12 @@ void Start(string plan)
     foreach (Match m in Regex.Matches(text, @"^###\s*Task\s+(\d+)\s*:\s*(.+?)\s*$", RegexOptions.Multiline))
         tasks.Add(new JsonObject
         {
-            ["id"] = m.Groups[1].Value, ["name"] = m.Groups[2].Value, ["status"] = "pending",
-            ["attempts"] = 0, ["started"] = null, ["ended"] = null,
+            ["id"] = m.Groups[1].Value,
+            ["name"] = m.Groups[2].Value,
+            ["status"] = "pending",
+            ["attempts"] = 0,
+            ["started"] = null,
+            ["ended"] = null,
         });
     if (tasks.Count == 0) Die("no tasks found. Tasks must be headed '### Task 1: <name>'.");
 
@@ -94,9 +98,14 @@ void Start(string plan)
 
     var state = new JsonObject
     {
-        ["feature"] = feature, ["plan"] = plan, ["plan_hash"] = FileHash(plan),
+        ["feature"] = feature,
+        ["plan"] = plan,
+        ["plan_hash"] = FileHash(plan),
         ["plan_commit"] = Git("log", "-1", "--format=%H", "--", plan),
-        ["branch"] = branch, ["status"] = "building", ["started"] = Now(), ["ended"] = null,
+        ["branch"] = branch,
+        ["status"] = "building",
+        ["started"] = Now(),
+        ["ended"] = null,
         ["tasks"] = tasks,
     };
     Save(state);
@@ -130,10 +139,16 @@ void Check(string taskId, string? testCmd)
     else
     {
         var baseline = File.Exists(BaselinePath) ? ProblemLines(File.ReadAllText(BaselinePath)) : new HashSet<string>();
-        var newProblems = ProblemLines(output).Except(baseline).OrderBy(x => x).ToList();
+        var problems = ProblemLines(output);
+        var newProblems = problems.Except(baseline).OrderBy(x => x).ToList();
         if (newProblems.Count > 0)
             output += "\n--- NEW problems (not in baseline) ---\n" + string.Join("\n", newProblems);
-        results.Add(("check vs baseline", newProblems.Count == 0, output));
+        // A check that fails without printing any recognisable problem (for example, it could not start)
+        // must never count as a pass, or a broken check command would let every task through.
+        var unrecognisedFailure = problems.Count == 0;
+        if (unrecognisedFailure)
+            output += $"\n--- The check exited with code {code} but printed no recognisable problem. Treated as a failure. ---";
+        results.Add(("check vs baseline", newProblems.Count == 0 && !unrecognisedFailure, output));
     }
 
     File.WriteAllText(LastCheckPath, string.Join("\n\n", results.Select(r => $"===== {r.Name} =====\n{r.Output}")));
@@ -358,7 +373,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | check <task> [--test \"cmd\"] | commit <task> [-m \"msg\"] | status | stop "reason" | finish | report [days]");
+    Console.Error.WriteLine("usage: factory start <plan> | check <task> [--test \"cmd\"] | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | report [days]");
     Environment.Exit(1);
 }
 
@@ -438,15 +453,26 @@ string Git(params string[] gitArgs)
     return output.Trim();
 }
 
-(int, string) Shell(string command) => OperatingSystem.IsWindows()
-    ? Run("cmd.exe", new[] { "/c", command })
-    : Run("/bin/sh", new[] { "-c", command });
+(int, string) Shell(string command)
+{
+    if (!OperatingSystem.IsWindows()) return Run("/bin/sh", new[] { "-c", command });
+
+    // cmd.exe cannot run a PowerShell script such as "./scripts/verify.ps1", so run .ps1 checks with PowerShell.
+    var script = Regex.Match(command, @"^\s*""?(?<path>[^""\s]+\.ps1)""?(?<rest>.*)$", RegexOptions.IgnoreCase);
+    if (!script.Success) return Run("cmd.exe", new[] { "/c", command });
+
+    var psArgs = new List<string> { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script.Groups["path"].Value };
+    psArgs.AddRange(script.Groups["rest"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    return Run("powershell.exe", psArgs);
+}
 
 (int, string) Run(string file, IEnumerable<string> argList, Dictionary<string, string>? env = null)
 {
     var psi = new ProcessStartInfo(file)
     {
-        RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
     };
     foreach (var a in argList) psi.ArgumentList.Add(a);
     if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;

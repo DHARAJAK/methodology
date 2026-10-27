@@ -17,7 +17,8 @@ Copy-Item $fc .factory/factory.cs
 $onWindows = $env:OS -eq 'Windows_NT'
 if ($onWindows) {
     Set-Content check.cmd "@echo off`r`necho old: error in legacy.cs line 99`r`nif exist BAD echo new: error in app.cs`r`nexit /b 1" -Encoding ascii
-    Set-Content .factory/config.json '{"check": "check.cmd"}' -Encoding ascii
+    # .\ prefix: machines with NoDefaultCurrentDirectoryInExePath=1 do not run programs from the current folder.
+    Set-Content .factory/config.json '{"check": ".\\check.cmd"}' -Encoding ascii
 } else {
     Set-Content check.sh "echo 'old: error in legacy.cs line 99'`n[ -f BAD ] && echo 'new: error in app.cs'`nexit 1" -Encoding ascii
     Set-Content .factory/config.json '{"check": "sh check.sh"}' -Encoding ascii
@@ -53,6 +54,21 @@ Remove-Item .factory/state.json
 F start specs/001-cart.md | Out-Null
 Add-Content specs/001-cart.md 'sneaky edit'
 Expect "STOP if the plan is edited"          (F check 1) 2
+
+git checkout -q -- specs/001-cart.md
+git switch -q main
+git branch -q -D feat/001-cart
+Remove-Item .factory/state.json
+F start specs/001-cart.md | Out-Null
+Set-Content .factory/config.json '{"check": "no-such-check-command"}' -Encoding ascii
+Expect "a check that cannot run fails"       (F check 1) 1
+
+if ($onWindows) {
+    # Prints only a baseline error, so this passes only if the script really ran (a script that cannot start now fails).
+    Set-Content check.ps1 "Write-Output 'old: error in legacy.cs line 99'`r`nexit 1" -Encoding ascii
+    Set-Content .factory/config.json '{"check": "./check.ps1"}' -Encoding ascii
+    Expect "a .ps1 check runs"                   (F check 1) 0
+}
 
 Pop-Location
 if ($bad -eq 0) { Write-Host "`nAll checks passed. Test repo left at $dir" -ForegroundColor Green }
