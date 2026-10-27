@@ -29,6 +29,11 @@ Set-Content specs/001-cart.md "# Plan: cart`nStatus: Approved 2026-10-23`n## Tas
 git add -A; git commit -qm init
 
 function F { & dotnet run .factory/factory.cs -- @args | Out-Host; return $LASTEXITCODE }
+function ExpectOutput($name, [string[]]$fargs, $pattern) {
+    $out = & dotnet run .factory/factory.cs -- @fargs 2>&1 | Out-String
+    if ($out -match $pattern) { Write-Host "PASS  $name" -ForegroundColor Green }
+    else { Write-Host "FAIL  $name (output did not match '$pattern'):`n$out" -ForegroundColor Red; $script:bad++ }
+}
 function Expect($name, $actual, $expected) {
     if ($actual -eq $expected) { Write-Host "PASS  $name" -ForegroundColor Green }
     else { Write-Host "FAIL  $name (exit $actual, expected $expected)" -ForegroundColor Red; $script:bad++ }
@@ -78,6 +83,21 @@ if ($onWindows) {
     Expect "re-check after review findings"      (F check 1) 0
     Expect "passed review is recorded"           (F review 1 --pass) 0
     Expect "commit after check and review"       (F commit 1) 0
+
+    F red 2 --skip "docs only" | Out-Null
+    Set-Content notes.md 'docs' -Encoding ascii
+    F check 2 | Out-Null
+    F review 2 --pass | Out-Null
+    Expect "last task commits"                   (F commit 2) 0
+    Expect "finish records metrics"              (F finish) 0
+    Expect "open-pr refuses an unfilled body"    (F open-pr --dry-run) 1
+    (Get-Content .factory/pr-body.md -Raw).Replace('<filled in by /build>', 'Review clean.') | Set-Content .factory/pr-body.md -Encoding ascii
+    git remote add origin https://gitlab.example.test/group/project.git
+    ExpectOutput "GitLab origin opens an MR into main" @('open-pr', '--dry-run') 'glab mr create --source-branch feat/001-cart --target-branch main'
+    Set-Content .factory/config.json '{"check": "./check.ps1", "base": "poc/main"}' -Encoding ascii
+    ExpectOutput "base branch is configurable"   @('open-pr', '--dry-run') '--target-branch poc/main'
+    git remote set-url origin https://github.com/someone/project.git
+    ExpectOutput "GitHub origin opens a PR"      @('open-pr', '--dry-run') 'gh pr create --head feat/001-cart --base poc/main'
 }
 
 Pop-Location

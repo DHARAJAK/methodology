@@ -31,6 +31,7 @@ The methodology needs ONE command that runs every standard check and exits non-z
   ```json
   { "check": "make check", "onboarded": "<YYYY-MM-DD>" }
   ```
+- If pull or merge requests target a branch other than `main` (for example `poc/main`), add `"base": "<branch>"`. If the origin URL does not show whether the host is GitLab or GitHub (for example a self-hosted server), add `"host": "gitlab"` or `"host": "github"`.
 - If the repo has its own review agent in `.claude/agents/` (one that knows the project's rules), add `"reviewer": "<agent name>"`. `/build` then runs it on every task before committing, and the referee refuses to commit a task without a passing review. Without one, only the whole-branch `/code-review` at the end runs.
 
 ## 4. Baseline of existing failures

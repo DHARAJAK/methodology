@@ -13,6 +13,10 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- status
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- stop "reason" (Code Evaluation failed: hand back to you)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- finish        (end of feature: metrics + PR body)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
+//
+// .factory/config.json: "check" (required), "reviewer" (agent name), "host" ("gitlab" | "github", default
+// from the origin URL), "base" (branch PRs/MRs target, default "main").
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- report [days] (summary for the 2-weekly review)
 //
 // Exit codes: 0 = ok, 1 = failed (rework allowed), 2 = STOP (needs you).
@@ -47,6 +51,7 @@ switch (args[0])
     case "commit": if (args.Length < 2) Usage(); Commit(args[1], Option("-m")); break;
     case "status": Status(); break;
     case "finish": Finish(); break;
+    case "open-pr": OpenPr(args.Contains("--dry-run")); break;
     case "stop": StopCommand(args.Length > 1 ? args[1] : "stopped by /build"); break;
     case "report": Report(args.Length > 1 && int.TryParse(args[1], out var d) ? d : 14); break;
     default: Usage(); break;
@@ -304,7 +309,7 @@ void Finish()
     var complexity = Regex.Matches(output, @"CA1502|CA1505|S3776|S1541|cyclomatic|cognitive complexity", RegexOptions.IgnoreCase).Count;
 
     // Dependencies added on this branch that the plan does not name.
-    var depDiff = Git("diff", "main...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
+    var depDiff = Git("diff", $"{BaseOf(config)}...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
     var added = Regex.Matches(depDiff, @"^\+.*(?:PackageReference|PackageVersion)\s+(?:Include|Update)=""([^""]+)""", RegexOptions.Multiline).Select(m => m.Groups[1].Value)
         .Concat(Regex.Matches(depDiff, @"^\+\s*""([@\w./-]+)""\s*:\s*""[\^~]?\d", RegexOptions.Multiline).Select(m => m.Groups[1].Value))
         .Distinct().ToList();
@@ -357,6 +362,42 @@ void Finish()
     Console.WriteLine($"Metrics appended to {MetricsPath}. PR body written to {PrBodyPath}.");
 }
 
+// Opens a GitHub pull request or GitLab merge request from the feature branch into the base branch.
+// The CLI gets its arguments as a list, so the multi-line body needs no shell quoting.
+void OpenPr(bool dryRun)
+{
+    var state = LoadJson(StatePath, "No build to open.");
+    if (Str(state, "status") != "finished") Die($"feature is {Str(state, "status")}; open-pr runs after 'factory finish' on a completed build.");
+    if (!File.Exists(PrBodyPath)) Die($"{PrBodyPath} not found. Run 'factory finish' first.");
+    var body = File.ReadAllText(PrBodyPath);
+    if (body.Contains("<filled in by /build>")) Die($"fill in the Code Evaluation section of {PrBodyPath} first.");
+
+    var config = LoadJson(ConfigPath, "Run /onboard first.");
+    var host = HostOf(config);
+    var baseBranch = BaseOf(config);
+    var branch = Str(state, "branch");
+    var planPath = Str(state, "plan");
+    var planTitle = File.Exists(planPath) ? Regex.Match(File.ReadAllText(planPath), @"^#\s*Plan:\s*(.+?)\s*$", RegexOptions.Multiline).Groups[1].Value : "";
+    var title = planTitle != "" ? planTitle : Str(state, "feature");
+
+    var (cli, cliArgs) = host == "gitlab"
+        ? ("glab", new[] { "mr", "create", "--source-branch", branch, "--target-branch", baseBranch, "--title", title, "--description", body, "--yes" })
+        : ("gh", new[] { "pr", "create", "--head", branch, "--base", baseBranch, "--title", title, "--body-file", PrBodyPath });
+    Console.WriteLine($"{host}: {cli} {string.Join(' ', cliArgs.Select(a => a == body ? "<pr-body.md>" : a.Contains(' ') ? $"\"{a}\"" : a))}");
+    if (dryRun) return;
+
+    try
+    {
+        var (code, output) = Run(cli, cliArgs);
+        Console.WriteLine(output.Trim());
+        if (code != 0) Die($"{cli} failed. Is it signed in (`{cli} auth login`) and is the branch pushed?");
+    }
+    catch (System.ComponentModel.Win32Exception)
+    {
+        Die($"{cli} is not installed. Install it, sign in with `{cli} auth login`, then run open-pr again.");
+    }
+}
+
 void Report(int days)
 {
     if (!File.Exists(MetricsPath)) Die("no metrics yet. They appear after the first 'factory finish'.");
@@ -367,7 +408,8 @@ void Report(int days)
     double Avg(string k) => rows.Where(r => r[k] != null).Select(r => r[k]!.GetValue<double>()).DefaultIfEmpty(0).Average();
     double Sum(string k) => rows.Where(r => r[k] != null).Select(r => r[k]!.GetValue<double>()).Sum();
     var medianHours = rows.Select(r => r["spec_to_pr_hours"]!.GetValue<double>()).OrderBy(x => x).ElementAt(rows.Count / 2);
-    var (_, escaped) = Shell("gh issue list --label escaped --state all --search \"created:>=" + since + "\" --json number --jq length");
+    var config = LoadJson(ConfigPath, "Run /onboard first.");
+    var escaped = EscapedBugs(config, since);
     var reverts = Git("log", $"--since={since}", "--grep=^Revert", "--oneline").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
 
     Console.WriteLine($"Last {days} days · {rows.Count} features · {Sum("tasks")} tasks");
@@ -381,7 +423,7 @@ void Report(int days)
     Console.WriteLine($"done-when coverage   {Avg("done_when_coverage"):P0}");
     Console.WriteLine($"test-first rate      {Avg("test_first_rate"):P0}");
     Console.WriteLine($"review findings      {Sum("review_findings")}");
-    Console.WriteLine($"escaped bugs         {(int.TryParse(escaped.Trim(), out var e) ? e.ToString() : "n/a (needs gh)")}");
+    Console.WriteLine($"escaped bugs         {escaped?.ToString() ?? $"n/a (needs {(HostOf(config) == "gitlab" ? "glab" : "gh")}, signed in)"}");
     Console.WriteLine($"reverts              {reverts}");
     Console.WriteLine($"secrets caught       {Sum("secrets_caught")}");
     Console.WriteLine($"unapproved deps      {Sum("unapproved_deps")}");
@@ -402,6 +444,47 @@ void Status()
 // ---------- helpers ----------
 
 double Ratio(int part, int whole) => whole == 0 ? 0 : Math.Round((double)part / whole, 2);
+
+string HostOf(JsonNode config)
+{
+    var host = Str(config, "host");
+    if (host != "") return host;
+    var (code, url) = Run("git", new[] { "remote", "get-url", "origin" });
+    return code == 0 && url.Contains("gitlab", StringComparison.OrdinalIgnoreCase) ? "gitlab" : "github";
+}
+
+string BaseOf(JsonNode config) => Str(config, "base") is { Length: > 0 } baseBranch ? baseBranch : "main";
+
+// "group/sub/project" from an https or ssh origin URL, for GitLab API calls.
+string? ProjectPath()
+{
+    var (code, output) = Run("git", new[] { "remote", "get-url", "origin" });
+    if (code != 0) return null;
+    var url = output.Trim();
+    var path = url.StartsWith("git@") ? url[(url.IndexOf(':') + 1)..] : new Uri(url).AbsolutePath.TrimStart('/');
+    return path.EndsWith(".git") ? path[..^4] : path;
+}
+
+// Issues labelled "escaped" (bugs found after merge) created since the date, or null if the host CLI is unavailable.
+int? EscapedBugs(JsonNode config, string since)
+{
+    try
+    {
+        if (HostOf(config) == "gitlab")
+        {
+            var project = ProjectPath();
+            if (project == null) return null;
+            var (code, output) = Run("glab", new[] { "api", $"projects/{Uri.EscapeDataString(project)}/issues?labels=escaped&scope=all&created_after={since}T00:00:00Z&per_page=100" });
+            return code == 0 ? JsonNode.Parse(output)?.AsArray().Count : null;
+        }
+        var (ghCode, ghOutput) = Run("gh", new[] { "issue", "list", "--label", "escaped", "--state", "all", "--search", $"created:>={since}", "--json", "number", "--jq", "length" });
+        return ghCode == 0 && int.TryParse(ghOutput.Trim(), out var count) ? count : null;
+    }
+    catch (System.ComponentModel.Win32Exception)
+    {
+        return null;
+    }
+}
 
 // Sums token usage from Claude Code's local session logs for this repo since the build started.
 // Logs live in ~/.claude/projects/<repo path with non-alphanumerics as '-'>/**/*.jsonl.
@@ -445,7 +528,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | report [days]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | report [days]");
     Environment.Exit(1);
 }
 

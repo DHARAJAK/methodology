@@ -10,7 +10,7 @@ In Claude Code:
 ```
 Restart Claude Code. Update later with `/plugin marketplace update methodology`.
 
-Needs: git, the .NET 10 SDK (one that matches the repo's `global.json`, because the hooks and referee run with `dotnet run` inside the repo), `gh` (signed in), gitleaks (recommended). Hooks run without a shell, so Git Bash is not required for them.
+Needs: git, the .NET 10 SDK (one that matches the repo's `global.json`, because the hooks and referee run with `dotnet run` inside the repo), `glab` for GitLab or `gh` for GitHub (signed in; the referee picks one from the origin URL), gitleaks (recommended). Hooks run without a shell, so Git Bash is not required for them.
 
 ## Use in a repo
 1. Make sure the repo has a `CLAUDE.md`.

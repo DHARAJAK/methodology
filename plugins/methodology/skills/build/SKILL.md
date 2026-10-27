@@ -1,6 +1,6 @@
 ---
 name: build
-description: Build an approved plan task by task with fresh subagents, the factory referee and hooks, then evaluate the whole feature and open a pull request.
+description: Build an approved plan task by task with fresh subagents, the factory referee and hooks, then evaluate the whole feature and open a pull request (GitHub) or merge request (GitLab).
 disable-model-invocation: true
 argument-hint: "specs/<NNN>-<name>.md"
 ---
@@ -31,7 +31,7 @@ Never edit code yourself, never commit with git directly, never change the plan.
 ## 3. Code Evaluation (whole feature, once)
 When `factory commit` says "All tasks done":
 1. **Plan coverage:** every task in the plan is committed and every Given/When/Then has a test. The end-to-end check in the plan: run it if it can be run automatically, otherwise list it for the user's `/verify`.
-2. **Review:** run the `/code-review` skill on this branch against `main`. Only correctness problems and requirement gaps count, not style.
+2. **Review:** run the `/code-review` skill on this branch against the base branch (`base` in `.factory/config.json`, default `main`). Only correctness problems and requirement gaps count, not style.
 3. **ADR gaps:** list new dependencies or new patterns in the diff that no ADR in `docs/adr/` covers. For each, write a short ADR with `Status: Proposed` in `docs/adr/` and commit them: `git commit -m "docs: proposed ADRs"`. The user accepts or rejects them in the PR.
 4. If the review found a real correctness problem or a requirement gap: run `factory stop "<one-line reason>"`, then go to step 5 (Needs you) with the findings. Do not fix it in this run.
 
@@ -39,8 +39,8 @@ When `factory commit` says "All tasks done":
 1. Run `factory finish`. It records the 13 metrics in `.factory/metrics.jsonl` and writes `.factory/pr-body.md`.
 2. Replace "<filled in by /build>" in `.factory/pr-body.md` with: the review result, the ADR gaps found, and the end-to-end check for `/verify`.
 3. Push the branch: `git push -u origin feat/<plan>` (the user approves the prompt).
-4. Open the PR: `gh pr create --base main --title "<feature name>" --body-file .factory/pr-body.md`.
-5. Tell the user: the PR link, the numbers in one line, and "Run `/verify` on the running app, read the diff, and merge it yourself."
+4. Open the pull request (GitHub) or merge request (GitLab): `factory open-pr`. The referee picks the host from the origin URL (or `host` in `.factory/config.json`) and targets the `base` branch. If it says the CLI is missing or not signed in, tell the user the exact command it printed (`glab auth login` or `gh auth login`) and stop; the branch is already pushed.
+5. Tell the user: the PR or MR link, the numbers in one line, and "Run `/verify` on the running app, read the diff, and merge it yourself."
 
 ## 5. Needs you (STOP)
 - Run `factory finish` so the stop is counted in the metrics (no PR is opened).
