@@ -5,7 +5,10 @@
 // failures, and refuses to commit work that has not passed the check.
 //
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- start  specs/001-cart.md
-//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- check  1 --test "dotnet test --filter Scenario_AddBook"
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- red    1 --test "dotnet test --filter AddBook" (must FAIL: test first)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- red    1 --skip "docs only"           (task needs no test)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- check  1 --test "dotnet test --filter AddBook"
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- review 1 --pass | --fail "findings" (when config names a reviewer)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- commit 1 -m "add-to-cart button"
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- status
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- stop "reason" (Code Evaluation failed: hand back to you)
@@ -38,7 +41,9 @@ if (args.Length == 0) Usage();
 switch (args[0])
 {
     case "start": if (args.Length < 2) Usage(); Start(args[1]); break;
+    case "red": if (args.Length < 2) Usage(); Red(args[1], Option("--test"), Option("--skip")); break;
     case "check": if (args.Length < 2) Usage(); Check(args[1], Option("--test")); break;
+    case "review": if (args.Length < 2) Usage(); Review(args[1], args.Contains("--pass"), Option("--fail")); break;
     case "commit": if (args.Length < 2) Usage(); Commit(args[1], Option("-m")); break;
     case "status": Status(); break;
     case "finish": Finish(); break;
@@ -113,6 +118,31 @@ void Start(string plan)
     foreach (var t in tasks) Console.WriteLine($"  Task {Str(t!, "id")}: {Str(t!, "name")}");
 }
 
+// Test first: the task's new tests must fail before any code is written, or they do not test the new behaviour.
+void Red(string taskId, string? testCmd, string? skipReason)
+{
+    var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
+    if (Str(state, "status") != "building") Die($"feature is {Str(state, "status")}, not building.", 2);
+    if (!PlanUnchanged(state)) Stop(state, "the plan changed during the build. Rerun /spec.");
+    var task = FindTask(state, taskId);
+    if (Str(task, "status") == "committed") Die($"task {taskId} is already committed.");
+
+    if (skipReason != null)
+    {
+        task["red"] = new JsonObject { ["at"] = Now(), ["skipped"] = skipReason };
+        Save(state);
+        Console.WriteLine($"Task {taskId}: no test, recorded as skipped ({skipReason}). Now run: factory check {taskId}");
+        return;
+    }
+    if (testCmd == null) Die("red needs --test \"<command for the new tests>\", or --skip \"<reason>\" for a task with no test.");
+
+    var (code, _) = Shell(testCmd);
+    if (code == 0) Die("the tests passed before the code was written, so they do not test the new behaviour. Write a test that fails first.");
+    task["red"] = new JsonObject { ["at"] = Now(), ["test"] = testCmd };
+    Save(state);
+    Console.WriteLine($"RED: task {taskId} has a failing test. Write the code, then run: factory check {taskId} --test \"{testCmd}\"");
+}
+
 void Check(string taskId, string? testCmd)
 {
     var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
@@ -120,6 +150,9 @@ void Check(string taskId, string? testCmd)
     if (!PlanUnchanged(state)) Stop(state, "the plan changed during the build. Rerun /spec.");
     var task = FindTask(state, taskId);
     if (Str(task, "status") == "committed") Die($"task {taskId} is already committed.");
+    if (task["red"] == null)
+        Die($"task {taskId} has no failing test on record. Test first: run 'factory red {taskId} --test \"<cmd>\"' before writing code.");
+    task["review"] = null;
 
     var attempts = task["attempts"]!.GetValue<int>() + 1;
     task["attempts"] = attempts;
@@ -172,12 +205,47 @@ void Check(string taskId, string? testCmd)
     Environment.Exit(1);
 }
 
+// Records the project reviewer's verdict on a task that passed the check. A failed review counts as an attempt.
+void Review(string taskId, bool pass, string? findings)
+{
+    var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
+    var task = FindTask(state, taskId);
+    if (Str(task, "status") != "passed") Die($"task {taskId} has not passed the check (status: {Str(task, "status")}). Review comes after a passing check.");
+    if (!pass && findings == null) Die("review needs --pass, or --fail \"<findings>\".");
+
+    if (pass)
+    {
+        task["review"] = new JsonObject { ["result"] = "pass", ["at"] = Now(), ["fingerprint"] = TreeFingerprint() };
+        Save(state);
+        Console.WriteLine($"Review passed for task {taskId}. Now run: factory commit {taskId}");
+        return;
+    }
+
+    task["review_findings"] = (task["review_findings"]?.GetValue<int>() ?? 0) + 1;
+    task["status"] = "failed";
+    var attempts = task["attempts"]!.GetValue<int>();
+    if (attempts >= MaxAttempts) Stop(state, $"task {taskId} failed review on attempt {attempts}: {findings}");
+    Save(state);
+    Console.WriteLine($"REVIEW FAILED: task {taskId}, attempt {attempts} of {MaxAttempts}. Send the findings to a new implementer:");
+    Console.WriteLine(findings);
+    Environment.Exit(1);
+}
+
 void Commit(string taskId, string? message)
 {
     var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
     var task = FindTask(state, taskId);
     if (Str(task, "status") != "passed")
         Die($"task {taskId} has not passed the check (status: {Str(task, "status")}). Refusing to commit.");
+    var reviewer = Str(LoadJson(ConfigPath, "Run /onboard first."), "reviewer");
+    if (reviewer != "")
+    {
+        var review = task["review"];
+        if (review == null || Str(review, "result") != "pass")
+            Die($"task {taskId} has not passed review by '{reviewer}'. Run the reviewer, then 'factory review {taskId} --pass'.");
+        if (Str(review, "fingerprint") != TreeFingerprint())
+            Die("files changed after the review. Run the check and the review again.");
+    }
     if (TreeFingerprint() != Str(task, "fingerprint"))
     {
         task["status"] = "failed";
@@ -260,6 +328,8 @@ void Finish()
         ["new_problems"] = newProblems,
         ["complexity_warnings"] = complexity,
         ["done_when_coverage"] = Ratio(committed.Count(t => t["has_test"]?.GetValue<bool>() == true), tasks.Count),
+        ["test_first_rate"] = Ratio(committed.Count(t => t["red"]?["test"] != null), tasks.Count),
+        ["review_findings"] = tasks.Sum(t => t["review_findings"]?.GetValue<int>() ?? 0),
         ["secrets_caught"] = state["secrets_caught"]?.GetValue<int>() ?? 0,
         ["unapproved_deps"] = unapproved.Count,
         ["tokens_total"] = tokensTotal,
@@ -309,6 +379,8 @@ void Report(int days)
     Console.WriteLine($"new problems         {Sum("new_problems")}");
     Console.WriteLine($"complexity warnings  {Sum("complexity_warnings")}");
     Console.WriteLine($"done-when coverage   {Avg("done_when_coverage"):P0}");
+    Console.WriteLine($"test-first rate      {Avg("test_first_rate"):P0}");
+    Console.WriteLine($"review findings      {Sum("review_findings")}");
     Console.WriteLine($"escaped bugs         {(int.TryParse(escaped.Trim(), out var e) ? e.ToString() : "n/a (needs gh)")}");
     Console.WriteLine($"reverts              {reverts}");
     Console.WriteLine($"secrets caught       {Sum("secrets_caught")}");
@@ -373,7 +445,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | check <task> [--test \"cmd\"] | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | report [days]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | report [days]");
     Environment.Exit(1);
 }
 

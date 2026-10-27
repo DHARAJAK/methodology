@@ -31,6 +31,7 @@ The methodology needs ONE command that runs every standard check and exits non-z
   ```json
   { "check": "make check", "onboarded": "<YYYY-MM-DD>" }
   ```
+- If the repo has its own review agent in `.claude/agents/` (one that knows the project's rules), add `"reviewer": "<agent name>"`. `/build` then runs it on every task before committing, and the referee refuses to commit a task without a passing review. Without one, only the whole-branch `/code-review` at the end runs.
 
 ## 4. Baseline of existing failures
 - Run the check command once. Do not fix anything, even if it fails.

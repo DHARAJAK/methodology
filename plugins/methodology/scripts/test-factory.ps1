@@ -36,6 +36,9 @@ function Expect($name, $actual, $expected) {
 
 Expect "start creates the branch"            (F start specs/001-cart.md) 0
 Expect "refuses commit before a pass"        (F commit 1) 1
+Expect "refuses check before a failing test" (F check 1) 1
+Expect "rejects tests that already pass"     (F red 1 --test "exit 0") 1
+Expect "records a failing test (red)"        (F red 1 --test "exit 1") 0
 Set-Content a.txt 'x'
 Expect "ignores errors already in baseline"  (F check 1) 0
 Set-Content b.txt 'y'
@@ -43,6 +46,7 @@ Expect "refuses commit if files changed"     (F commit 1) 1
 Expect "re-check passes"                     (F check 1) 0
 Expect "commit after a pass"                 (F commit 1) 0
 New-Item BAD -ItemType File | Out-Null
+Expect "red can be skipped with a reason"    (F red 2 --skip "no behaviour to test") 0
 Expect "new error fails (attempt 1)"         (F check 2) 1
 Expect "new error fails (attempt 2)"         (F check 2) 1
 Expect "STOP after 3 failures"               (F check 2) 2
@@ -61,13 +65,19 @@ git branch -q -D feat/001-cart
 Remove-Item .factory/state.json
 F start specs/001-cart.md | Out-Null
 Set-Content .factory/config.json '{"check": "no-such-check-command"}' -Encoding ascii
+F red 1 --test "exit 1" | Out-Null
 Expect "a check that cannot run fails"       (F check 1) 1
 
 if ($onWindows) {
     # Prints only a baseline error, so this passes only if the script really ran (a script that cannot start now fails).
     Set-Content check.ps1 "Write-Output 'old: error in legacy.cs line 99'`r`nexit 1" -Encoding ascii
-    Set-Content .factory/config.json '{"check": "./check.ps1"}' -Encoding ascii
+    Set-Content .factory/config.json '{"check": "./check.ps1", "reviewer": "test-reviewer"}' -Encoding ascii
     Expect "a .ps1 check runs"                   (F check 1) 0
+    Expect "refuses commit before review"        (F commit 1) 1
+    Expect "failed review fails the task"        (F review 1 --fail "event raised under lock") 1
+    Expect "re-check after review findings"      (F check 1) 0
+    Expect "passed review is recorded"           (F review 1 --pass) 0
+    Expect "commit after check and review"       (F commit 1) 0
 }
 
 Pop-Location

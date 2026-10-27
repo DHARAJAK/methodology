@@ -29,12 +29,12 @@ If a skill name clashes with another plugin, use the full name, e.g. `/methodolo
 |---|---|
 | `plugins/methodology/skills/onboard` | `/onboard`: check command, baseline, safety rules, secrets scan |
 | `plugins/methodology/skills/spec` | `/spec`: interview, glossary, plan with Given/When/Then, approval checklist |
-| `plugins/methodology/skills/build` | `/build`: one fresh subagent per task, referee, Code Evaluation, PR |
-| `plugins/methodology/agents/implementer.md` | Builds one task, test first |
-| `plugins/methodology/scripts/factory.cs` | The referee: start, check, commit, status, stop, finish, report |
+| `plugins/methodology/skills/build` | `/build`: one fresh subagent per task, referee, per-task project review, Code Evaluation, PR |
+| `plugins/methodology/agents/implementer.md` | Builds one task, test first (proves the test fails with `factory red`) |
+| `plugins/methodology/scripts/factory.cs` | The referee: start, red, check, review, commit, status, stop, finish, report |
 | `plugins/methodology/scripts/hooks.cs` | Lock the plan, no raw commit, format `.cs`, no finishing with open tasks |
 | `plugins/methodology/hooks/hooks.json` | When each hook runs (only in onboarded repos) |
 | `plugins/methodology/templates/` | Safety settings and pre-commit hook that `/onboard` copies into a repo |
 | `plugins/methodology/scripts/test-factory.ps1` | Tests the referee in a throwaway repo |
 
-Status: written, not yet run on a machine with .NET. Run `test-factory.ps1` first.
+Status: the referee passes `test-factory.ps1` (21 scenarios) on Windows with the .NET 10 SDK. `hooks.cs` and the `/spec`, `/build` and `/onboard` flows are not yet tested end to end.
