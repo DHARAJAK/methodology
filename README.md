@@ -19,7 +19,7 @@ Needs: git, the .NET 10 SDK (one that matches the repo's `global.json`, because 
    - **Tiny:** just ask, run the check, commit.
    - **Bug:** failing test first, fix, check, PR.
    - **Medium:** plan mode, Ctrl+G to edit, build, check, PR.
-   - **Feature:** `/spec <idea>`, approve, `/clear`, `/build specs/<file>`, then `/verify` and merge the PR yourself.
+   - **Feature:** `/spec <idea>`, approve, `/clear`, `/build specs/<file>` (or the `specs` folder set in `.factory/config.json`), then `/verify` and merge the PR yourself.
 4. Every two weeks: `dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- report`, pick the worst number, make ONE process change, record it as an ADR. Label bugs found after merge `escaped`.
 
 If a skill name clashes with another plugin, use the full name, e.g. `/methodology:spec`.

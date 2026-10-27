@@ -2,7 +2,7 @@
 name: build
 description: Build an approved plan task by task with fresh subagents, the factory referee and hooks, then evaluate the whole feature and open a pull request (GitHub) or merge request (GitLab).
 disable-model-invocation: true
-argument-hint: "specs/<NNN>-<name>.md"
+argument-hint: "<specs folder>/<NNN>-<name>.md"
 ---
 
 # /build

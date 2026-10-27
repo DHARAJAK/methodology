@@ -22,7 +22,7 @@ git add -A; git commit -qm init
 
 function SetBuilding([bool]$building, [string]$task2 = 'pending') {
     $status = if ($building) { 'building' } else { 'finished' }
-    Set-Content .factory/state.json "{`n  `"status`": `"$status`",`n  `"tasks`": [`n    { `"id`": `"1`", `"status`": `"committed`" },`n    { `"id`": `"2`", `"status`": `"$task2`" }`n  ]`n}" -Encoding ascii
+    Set-Content .factory/state.json "{`n  `"status`": `"$status`",`n  `"plan`": `"specs/001-cart.md`",`n  `"tasks`": [`n    { `"id`": `"1`", `"status`": `"committed`" },`n    { `"id`": `"2`", `"status`": `"$task2`" }`n  ]`n}" -Encoding ascii
 }
 function Hook($name, $json) { $json | & dotnet run $hooks -- $name 2>$null | Out-Null; return $LASTEXITCODE }
 function Shell($command) { return "{`"tool_input`": {`"command`": `"$command`"}}" }
@@ -55,6 +55,11 @@ Expect "build: git status is allowed"          (Hook no-raw-commit (Shell 'git s
 Expect "build: plan is locked"                 (Hook lock-specs (Edit "$dir/specs/001-cart.md")) 2
 Expect "build: .factory is locked"             (Hook lock-specs (Edit "$dir/.factory/state.json")) 2
 Expect "build: source files can be edited"     (Hook lock-specs (Edit "$dir/src/App.cs")) 0
+Set-Content .factory/config.json '{"check": "exit 0", "specs": "docs/specs/"}' -Encoding ascii
+Expect "build: configured specs folder locked"  (Hook lock-specs (Edit "$dir/docs/specs/002-call.md")) 2
+Expect "build: default specs/ not locked then"  (Hook lock-specs (Edit "$dir/specs/notes.md")) 0
+Expect "build: plan being built stays locked"   (Hook lock-specs (Edit "$dir/specs/001-cart.md")) 2
+Set-Content .factory/config.json '{"check": "exit 0"}' -Encoding ascii
 Expect "build: stop refused with open tasks"   (Hook stop '{"stop_hook_active": false}') 2
 Expect "build: stop allowed when reminded once" (Hook stop '{"stop_hook_active": true}') 0
 SetBuilding $true 'committed'

@@ -32,6 +32,7 @@ The methodology needs ONE command that runs every standard check and exits non-z
   { "check": "make check", "onboarded": "<YYYY-MM-DD>" }
   ```
 - If pull or merge requests target a branch other than `main` (for example `poc/main`), add `"base": "<branch>"`. If the origin URL does not show whether the host is GitLab or GitHub (for example a self-hosted server), add `"host": "gitlab"` or `"host": "github"`.
+- If the repo already keeps specs or ADRs somewhere other than `specs/` and `docs/adr/` (CLAUDE.md or the folders show it), add `"specs": "<folder>"` and `"adrs": "<folder>"` so `/spec` and `/build` use them. The referee only builds plans in the `specs` folder, and the hooks lock that folder during `/build`. If the repo has its own spec template, tell the user `/spec` writes plans in the plugin's format (the referee reads its `### Task N:` headings), and suggest they move any project-specific fields into the plan's Design section.
 - If the repo has its own review agent in `.claude/agents/` (one that knows the project's rules), add `"reviewer": "<agent name>"`. `/build` then runs it on every task before committing, and the referee refuses to commit a task without a passing review. Without one, only the whole-branch `/code-review` at the end runs.
 
 ## 4. Baseline of existing failures
@@ -53,12 +54,13 @@ The methodology needs ONE command that runs every standard check and exits non-z
 
 ## 5. Safety settings
 - Copy `${CLAUDE_PLUGIN_ROOT}/templates/settings.json` (from the methodology plugin) to `.claude/settings.json` in the repo.
-- If the repo already has one, merge: keep every existing rule and add the template's `deny` and `ask` rules. Never remove a rule.
+- If the repo already has one, merge: keep every existing rule and add the template's `deny` and `ask` rules. Never remove a rule. Keep any hooks it already has, such as a Stop hook that runs the check: they run alongside the plugin's hooks.
 - The template has every command rule twice, as `Bash(...)` and `PowerShell(...)`, because on Windows Claude Code may run commands through PowerShell. Keep both.
 - Show the user the final `deny` and `ask` lists.
 
 ## 6. Secrets scan at pre-commit
 - Copy `${CLAUDE_PLUGIN_ROOT}/templates/pre-commit` to `.githooks/pre-commit` in the repo, make it executable, and run `git config core.hooksPath .githooks`.
+- If the repo already has a `.githooks/pre-commit`, compare it with the template. If it does only the gitleaks scan, replace it with the template (which adds the `/build` commit guard). If it does more, add the template's `/build` guard block to the top of it and keep the rest.
 - Add the line `.githooks/* text eol=lf` to `.gitattributes` (create it if missing), so Windows line endings never break the hook script.
 - Check that `gitleaks` is installed (`gitleaks version`). If it is not, do NOT install it yourself: tell the user how (for example `winget install gitleaks`, `brew install gitleaks`), and note it in the summary.
 
