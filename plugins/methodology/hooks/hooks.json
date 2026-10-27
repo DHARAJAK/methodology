@@ -48,7 +48,7 @@
               "no-raw-commit"
             ],
             "timeout": 60,
-            "if": "Bash(git commit *)"
+            "if": "Bash(git *)"
           }
         ]
       },
@@ -65,7 +65,7 @@
               "no-raw-commit"
             ],
             "timeout": 60,
-            "if": "PowerShell(git commit *)"
+            "if": "PowerShell(git *)"
           }
         ]
       }

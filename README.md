@@ -37,4 +37,7 @@ If a skill name clashes with another plugin, use the full name, e.g. `/methodolo
 | `plugins/methodology/templates/` | Safety settings and pre-commit hook that `/onboard` copies into a repo |
 | `plugins/methodology/scripts/test-factory.ps1` | Tests the referee in a throwaway repo |
 
-Status: the referee passes `test-factory.ps1` (21 scenarios) on Windows with the .NET 10 SDK. `hooks.cs` and the `/spec`, `/build` and `/onboard` flows are not yet tested end to end.
+Status: on Windows with the .NET 10 SDK, the referee passes `test-factory.ps1` (27 scenarios) and the hooks and git commit guard pass `test-hooks.ps1` (23 scenarios). The `/spec`, `/build` and `/onboard` flows, and real `glab`/`gh` calls, are not yet tested end to end.
+
+## How test-first is enforced
+Prompts guide; hooks and gates enforce. The implementer is told to write tests first, the referee refuses `check` until `factory red` saw those tests fail, and only `factory commit` may commit during `/build`. That last rule is held by two layers: a Claude Code hook that blocks `git commit` (including `git -C . commit` and `--no-verify`), and a git `pre-commit` guard that refuses any commit during a build without the referee's marker, however it was started. Guard hooks fail closed: if they cannot read their input, they block. Remaining limit: something that rewrites `.factory/state.json` from a shell could forge the referee's records; the per-task reviewer and the merge request review are the backstop.
