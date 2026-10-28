@@ -83,6 +83,7 @@ return 0;
 
 void Start(string plan)
 {
+    plan = plan.TrimStart('@'); // "@docs/specs/x.md" is how Claude Code mentions a file
     if (!File.Exists(plan)) Die($"plan {plan} not found.");
     var text = File.ReadAllText(plan);
     if (!Regex.IsMatch(text, @"^Status:\s*Approved", RegexOptions.Multiline))
@@ -440,8 +441,15 @@ void Finish()
     state["ended"] = Now();
     state["status"] = status == "stopped" ? "stopped-recorded" : "finished";
     Save(state);
+    // Commit the metrics line, or the next "factory start" finds an uncommitted change after every build.
+    if (Run("git", new[] { "check-ignore", "-q", MetricsPath }).Item1 != 0)
+    {
+        Git("add", "--", MetricsPath);
+        var (mrc, mout) = Run("git", new[] { "commit", "-q", "-m", $"metrics: {Str(state, "feature")}", "--", MetricsPath }, new() { ["FACTORY_COMMIT"] = "1" });
+        if (mrc != 0) Console.WriteLine($"Could not commit {MetricsPath}: {mout.Trim()}");
+    }
     Console.WriteLine(metrics.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-    Console.WriteLine($"Metrics appended to {MetricsPath}. PR body written to {PrBodyPath}.");
+    Console.WriteLine($"Metrics appended to {MetricsPath} and committed. PR body written to {PrBodyPath}.");
     Console.WriteLine($"Retro written to {retroPath}. Run /retro when you review the merge request; the next build waits for its decision.");
 }
 
