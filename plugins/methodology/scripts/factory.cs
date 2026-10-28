@@ -16,6 +16,7 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- decide --bucket spec-gap --change "..." --metric first_pass_rate [--where plugin]
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- decide --none "reason"   (the retro decision; start waits for it)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- note "finding"           (adds to the newest retro, for the next /spec)
 //
 // .factory/config.json: "check" (required), "reviewer" (agent name), "host" ("gitlab" | "github", default
 // from the origin URL), "base" (branch PRs/MRs target, default "main"), "specs" (plan folder, default
@@ -68,6 +69,7 @@ switch (args[0])
     case "status": Status(); break;
     case "finish": Finish(); break;
     case "open-pr": OpenPr(args.Contains("--dry-run")); break;
+    case "note": if (args.Length < 2) Usage(); Note(args[1]); break;
     case "decide": Decide(Option("--bucket"), Option("--change"), Option("--metric"), Option("--where"), Option("--none"), Option("--feature")); break;
     case "stop": StopCommand(args.Length > 1 ? args[1] : "stopped by /build"); break;
     case "report": Report(args.Length > 1 && int.TryParse(args[1], out var d) ? d : 14); break;
@@ -134,8 +136,13 @@ void Start(string plan)
     // The feature must start from the configured base branch, or the PR/MR would carry unrelated commits.
     var current = Git("branch", "--show-current");
     var configBase = Str(LoadJson(ConfigPath, "Run /onboard first."), "base");
-    if (configBase != "" && current != configBase) Die($"you are on '{current}'. Switch to the base branch '{configBase}' (and pull) first.");
-    var baseBranch = configBase != "" ? configBase : current; // main, master, develop...: whatever the feature starts from
+    // A follow-up spec may build on top of a stopped build's branch: its commits then go into this MR too.
+    var previous = File.Exists(StatePath) ? LoadJson(StatePath, "") : null;
+    var stackedOn = previous != null && Str(previous, "status") == "stopped-recorded" && Str(previous, "branch") == current ? previous : null;
+    if (configBase != "" && current != configBase && stackedOn == null)
+        Die($"you are on '{current}'. Switch to the base branch '{configBase}' (and pull) first, or to the branch of the stopped build this plan follows up.");
+    // main, master, develop...: whatever the feature starts from, or what the stopped build was heading for.
+    var baseBranch = configBase != "" ? configBase : stackedOn != null ? BaseOf(new JsonObject(), stackedOn) : current;
     if (Git("branch", "--list", branch) != "") Die($"branch {branch} already exists. Delete it or rename the plan.");
     Git("switch", "-c", branch);
 
@@ -147,6 +154,7 @@ void Start(string plan)
         ["plan_commit"] = Git("log", "-1", "--format=%H", "--", plan),
         ["branch"] = branch,
         ["base"] = baseBranch,
+        ["stacked_on"] = stackedOn != null ? Str(stackedOn, "feature") : null,
         ["status"] = "building",
         ["started"] = Now(),
         ["ended"] = null,
@@ -154,6 +162,7 @@ void Start(string plan)
     };
     Save(state);
     Console.WriteLine($"Started {feature} on branch {branch} with {tasks.Count} tasks.");
+    if (stackedOn != null) Console.WriteLine($"Built on top of the stopped build {Str(stackedOn, "feature")}: its commits go into the same merge request, into {baseBranch}.");
     foreach (var t in tasks) Console.WriteLine($"  Task {Str(t!, "id")}: {Str(t!, "name")}");
 }
 
@@ -519,6 +528,20 @@ void ImprovementsReport(string metricsFile)
     }
 }
 
+// Adds a finding to the newest retro, the one permanent place for what the next /spec must know.
+void Note(string text)
+{
+    var latest = Directory.Exists(RetroDir) ? Directory.GetFiles(RetroDir, "*.md").OrderBy(File.GetLastWriteTimeUtc).LastOrDefault() : null;
+    if (latest == null) Die("no retro yet. Notes go into the retro that 'factory finish' writes.");
+    var md = File.ReadAllText(latest);
+    const string heading = "## Notes for the next spec";
+    if (!md.Contains(heading)) md = md.Replace("## Buckets", heading + "\n\n## Buckets");
+    var at = md.IndexOf("## Buckets");
+    md = md[..at].TrimEnd() + "\n- " + text.Replace("\r", "").Replace("\n", "\n  ") + "\n\n" + md[at..];
+    File.WriteAllText(latest, md);
+    Console.WriteLine($"Noted in {latest}");
+}
+
 // Records the retro decision: one change (bucket, what, which number should move) or none with a reason.
 void Decide(string? bucket, string? change, string? metric, string? place, string? none, string? feature)
 {
@@ -775,7 +798,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | report [days]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | report [days]");
     Environment.Exit(1);
 }
 

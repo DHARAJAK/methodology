@@ -12,7 +12,7 @@ Build the approved plan `$ARGUMENTS`. You are a thin coordinator: subagents writ
 The referee is `dotnet run "${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs" -- <command>`, written below as `factory <command>`. The path is filled in by Claude Code and works in Bash and PowerShell alike.
 
 ## 1. Start
-- Switch to the base branch first (`base` in `.factory/config.json`; if none, the repo's `main` or `master`) and pull. Then run `factory start $ARGUMENTS`. If it refuses, tell the user why and stop.
+- Switch to the base branch first (`base` in `.factory/config.json`; if none, the repo's `main` or `master`) and pull. Exception: a plan that follows up a stopped build starts on that build's branch; `factory start` accepts that and puts both in one merge request. Then run `factory start $ARGUMENTS`. If it refuses, tell the user why and stop.
 - It creates the branch `feat/<plan>` and lists the tasks. If it says "Resuming", continue with the first task that is not committed (`factory status`).
 
 ## 2. For each task, in order
@@ -45,7 +45,8 @@ When `factory commit` says "All tasks done":
 5. Tell the user in ONE message: the PR or MR link, the numbers in one line, the retro file `factory finish` printed, and "Run `/verify`, read the diff, merge it yourself, and run `/retro` while you are there: the next build waits for its decision."
 
 ## 5. Needs you (STOP)
-- Run `factory finish` so the stop is counted in the metrics (no PR is opened).
+- Run `factory finish` so the stop is counted in the metrics (no PR is opened). It writes the retro.
+- Save everything the follow-up `/spec` needs (each review finding with its example data, decisions to make, test cases that broke an attempt) with `factory note "<finding>"`, one call per finding. It goes into the retro, which survives the session, `/clear` and an unmerged branch. Never put build findings in the session scratchpad, a temp folder or only in your reply: those disappear.
 - Tell the user, in plain words: which task or check stopped, the reason (from `factory status` and `.factory/last-check.txt`), and that the work is kept on the branch.
 - Suggest the next step: usually the plan was unclear, so rerun `/spec` for this feature with what was learned. Point to the retro file `factory finish` printed and `/retro`: the next build waits for its decision.
 - This is the only message of the run. Do not ask the user anything earlier: everything between plan approval and this point runs without them.

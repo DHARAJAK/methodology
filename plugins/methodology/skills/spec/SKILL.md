@@ -17,6 +17,7 @@ If the idea is a tiny change, a single bug, or a medium change with an obvious a
 ## 1. Idea
 - Restate the idea in 2-3 lines and ask the user to confirm.
 - Use the Explore subagent to read the relevant code, `CLAUDE.md` and `<adrs>/`, so your questions are informed and the plan respects existing decisions.
+- If this follows up a stopped build, read its retro (`git rev-parse --git-common-dir`, then `factory/retros/<feature>.md`): the Evidence and "Notes for the next spec" sections are your brief. Every finding there needs a task or a line in Out of scope.
 
 ## 2. Interview (about 10 questions max)
 - Ask ONE question at a time. Offer 2-4 likely answers plus "other" when you can.

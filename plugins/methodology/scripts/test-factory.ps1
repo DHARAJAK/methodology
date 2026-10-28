@@ -134,6 +134,17 @@ if ($onWindows) {
     Expect "decide records the change"           (F decide --bucket spec-gap --change "tasks list tricky inputs" --metric first_pass_rate) 0
     ExpectOutput "report shows the change"       @('report') 'tasks list tricky inputs'
     Expect "start goes ahead after the decision" (F start specs/004-next.md) 0
+
+    # A follow-up spec builds on top of a stopped build's branch; notes for it go into the retro.
+    F stop "test stop" | Out-Null
+    F finish | Out-Null
+    F decide --none "test" | Out-Null
+    ExpectOutput "note goes into the retro"      @('note', 'check the + prefix') 'Noted in'
+    Expect "note is in the retro"                ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/retros/004-next.md') -Raw) -match 'check the \+ prefix') $true
+    Set-Content .factory/config.json '{"check": "./check.ps1", "base": "main"}' -Encoding ascii
+    Set-Content specs/005-follow.md "# Plan: follow`n$good`n### Task 1: fix`nTricky inputs: none (test)" -Encoding ascii
+    git add -A; git commit -qm "follow-up plan"
+    Expect "follow-up builds on the stopped branch" (F start specs/005-follow.md) 0
 }
 
 Pop-Location
