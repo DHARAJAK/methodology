@@ -68,7 +68,7 @@ ExpectOutput "asks for the differences section" @('start', 'specs/002-gaps.md') 
 ExpectOutput "asks for an input/output table"  @('start', 'specs/002-gaps.md') 'Task 2 parses or transforms text'
 ExpectOutput "asks a task to own the end-to-end check" @('start', 'specs/002-gaps.md') 'No task owns the end-to-end check'
 Set-Content draft.md 'old notes, not part of the feature'
-Expect "start creates the branch"            (F start specs/001-cart.md) 0
+Expect "start creates the branch (@path too)" (F start '@specs/001-cart.md') 0
 Expect "refuses commit before a pass"        (F commit 1) 1
 Expect "refuses check before a failing test" (F check 1) 1
 Expect "rejects tests that already pass"     (F red 1 --test "exit 0") 1
@@ -120,6 +120,7 @@ if ($onWindows) {
     F review 2 --pass | Out-Null
     Expect "last task commits"                   (F commit 2) 0
     Expect "finish records metrics"              (F finish) 0
+    Expect "finish commits the metrics line"     ((git status --porcelain -- .factory/metrics.jsonl) -eq $null) $true
     Expect "open-pr refuses an unfilled body"    (F open-pr --dry-run) 1
     (Get-Content .factory/pr-body.md -Raw).Replace('<filled in by /build>', 'Review clean.') | Set-Content .factory/pr-body.md -Encoding ascii
     git remote add origin https://gitlab.example.test/group/project.git
