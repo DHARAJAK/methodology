@@ -142,7 +142,11 @@ if ($onWindows) {
 
     # A follow-up spec builds on top of a stopped build's branch; notes for it go into the retro.
     F stop "test stop" | Out-Null
+    ExpectOutput "a note before finish waits for this build" @('note', 'noted before finish') 'Noted for the 004-next retro'
     F finish | Out-Null
+    $retros = Join-Path (git rev-parse --git-common-dir) 'factory/retros'
+    Expect "early note lands in this build's retro" ((Get-Content (Join-Path $retros '004-next.md') -Raw) -match 'noted before finish') $true
+    Expect "early note stays out of the old retro"  ((Get-Content (Join-Path $retros '001-cart.md') -Raw) -match 'noted before finish') $false
     F decide --none "test" | Out-Null
     ExpectOutput "note goes into the retro"      @('note', 'check the + prefix') 'Noted in'
     Expect "note is in the retro"                ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/retros/004-next.md') -Raw) -match 'check the \+ prefix') $true
