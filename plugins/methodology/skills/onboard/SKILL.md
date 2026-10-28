@@ -54,9 +54,10 @@ The methodology needs ONE command that runs every standard check and exits non-z
 
 ## 5. Safety settings
 - Copy `${CLAUDE_PLUGIN_ROOT}/templates/settings.json` (from the methodology plugin) to `.claude/settings.json` in the repo.
-- If the repo already has one, merge: keep every existing rule and add the template's `deny` and `ask` rules. Never remove a rule. Keep any hooks it already has, such as a Stop hook that runs the check: they run alongside the plugin's hooks.
+- If the repo already has one, merge: keep every existing rule and add the template's `allow`, `deny` and `ask` rules and its `defaultMode`. Never remove a rule, with one exception: remove an old `ask` rule `Bash(git push *)` / `PowerShell(git push *)` (from plugin 0.1.5 or earlier), because ask beats allow and it would stop every `/build` at the push. Keep any hooks it already has, such as a Stop hook that runs the check: they run alongside the plugin's hooks.
+- What the template does for a one-flow `/build`: edits are accepted without prompts (`defaultMode: acceptEdits`; the hooks still guard the plan and `.factory/`), the referee and test commands run without prompts, and `git push` to a `feat/*` branch is allowed. Pushing to `main`/`master` or with `HEAD:` stays denied. Tell the user to also protect the base branch on GitLab/GitHub, the only rule no local setting can bypass.
 - The template has every command rule twice, as `Bash(...)` and `PowerShell(...)`, because on Windows Claude Code may run commands through PowerShell. Keep both.
-- Show the user the final `deny` and `ask` lists.
+- Show the user the final `allow`, `deny` and `ask` lists.
 
 ## 6. Secrets scan at pre-commit
 - Copy `${CLAUDE_PLUGIN_ROOT}/templates/pre-commit` to `.githooks/pre-commit` in the repo, make it executable, and run `git config core.hooksPath .githooks`.

@@ -29,6 +29,7 @@ If the idea is a tiny change, a single bug, or a medium change with an obvious a
 - Every task is small enough for one fresh subagent: a few files, one behavior.
 - Every task has at least one done-when written as **Given / When / Then**, with real example input and a result a user would notice. No vague ones like "login works".
 - Name the files and interfaces each task touches, what is out of scope, any new dependency, any decision that needs an ADR, and one end-to-end check for the whole feature.
+- Every task gets a `Scenario: Tricky:` for the input most likely to break it (ask about these in the interview), or `Tricky inputs: none (<reason>)`. List differences from existing behaviour (or "none"). `/build` refuses a plan without these, and refuses a plan that mentions a file that doesn't exist and isn't in a task's Files line or marked (new).
 
 ## 4. Approve
 - Go through the approval checklist at the end of the template with the user, item by item.

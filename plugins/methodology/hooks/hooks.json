@@ -104,6 +104,23 @@
           }
         ]
       }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dotnet",
+            "args": [
+              "run",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hooks.cs",
+              "--",
+              "notify"
+            ],
+            "timeout": 60
+          }
+        ]
+      }
     ]
   }
 }

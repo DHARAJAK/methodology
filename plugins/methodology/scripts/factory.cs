@@ -14,11 +14,16 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- stop "reason" (Code Evaluation failed: hand back to you)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- finish        (end of feature: metrics + PR body)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- decide --bucket spec-gap --change "..." --metric first_pass_rate [--where plugin]
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- decide --none "reason"   (the retro decision; start waits for it)
 //
 // .factory/config.json: "check" (required), "reviewer" (agent name), "host" ("gitlab" | "github", default
 // from the origin URL), "base" (branch PRs/MRs target, default "main"), "specs" (plan folder, default
 // "specs"), "adrs" (ADR folder for /spec and /build, default "docs/adr").
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- report [days] (summary for the 2-weekly review)
+//
+// Improvement loop (ADR-016): finish writes a retro to <git common dir>/factory/retros/, shared by all
+// worktrees and never pushed. The next start refuses until 'decide' records what changes because of it.
 //
 // Exit codes: 0 = ok, 1 = failed (rework allowed), 2 = STOP (needs you).
 // Needs the .NET 10 SDK and git. Stores numbers and IDs only, never code or prompts.
@@ -39,8 +44,18 @@ string LastCheckPath = Path.Combine(Factory, "last-check.txt");
 string MetricsPath = Path.Combine(Factory, "metrics.jsonl");
 string PrBodyPath = Path.Combine(Factory, "pr-body.md");
 
-if (!Directory.Exists(".git")) Die("run this from the repo root.");
+// In a worktree .git is a file, not a folder.
+if (!Directory.Exists(".git") && !File.Exists(".git")) Die("run this from the repo root.");
 Directory.CreateDirectory(Factory);
+// The improvement loop's files live in the shared .git folder: they survive a STOP on an unmerged branch,
+// every worktree sees the same ones, and they are never pushed.
+string LoopDir = Path.Combine(Path.GetFullPath(Git("rev-parse", "--git-common-dir")), "factory");
+string RetroDir = Path.Combine(LoopDir, "retros");
+string LoopMetricsPath = Path.Combine(LoopDir, "metrics.jsonl");
+string ImprovementsPath = Path.Combine(LoopDir, "improvements.jsonl");
+// Metrics where higher is better; for every other number lower is better.
+string[] HigherIsBetter = { "first_pass_rate", "done_when_coverage", "test_first_rate" };
+string[] Buckets = { "spec-gap", "harness-gap", "rule-gap", "model-slip" };
 
 if (args.Length == 0) Usage();
 switch (args[0])
@@ -53,6 +68,7 @@ switch (args[0])
     case "status": Status(); break;
     case "finish": Finish(); break;
     case "open-pr": OpenPr(args.Contains("--dry-run")); break;
+    case "decide": Decide(Option("--bucket"), Option("--change"), Option("--metric"), Option("--where"), Option("--none"), Option("--feature")); break;
     case "stop": StopCommand(args.Length > 1 ? args[1] : "stopped by /build"); break;
     case "report": Report(args.Length > 1 && int.TryParse(args[1], out var d) ? d : 14); break;
     default: Usage(); break;
@@ -87,6 +103,15 @@ void Start(string plan)
         if (Str(old, "status") == "building")
             Die($"another feature is still building ({Str(old, "plan")}). Finish or stop it first.");
     }
+
+    // Improvement loop gate: the last build's retro needs a decision before the next build starts.
+    var undecided = UndecidedRetros();
+    if (undecided.Count > 0)
+        Die($"the last build ({string.Join(", ", undecided)}) has no retro decision. Run /retro, or: factory decide --none \"<reason>\"");
+
+    var planProblems = PlanProblems(text);
+    if (planProblems.Count > 0)
+        Die("the plan has gaps the build would trip over. Fix them with /spec and approve again:\n  - " + string.Join("\n  - ", planProblems));
 
     if (Git("status", "--porcelain", "--untracked-files=no") != "")
         Die("working tree has uncommitted changes. Commit or stash them first.");
@@ -174,6 +199,7 @@ void Check(string taskId, string? testCmd)
     var config = LoadJson(ConfigPath, "Run /onboard first.");
 
     var results = new List<(string Name, bool Ok, string Output)>();
+    var newProblemLines = new List<string>();
     if (testCmd != null)
     {
         var (tc, tout) = Shell(testCmd);
@@ -188,6 +214,7 @@ void Check(string taskId, string? testCmd)
         var baseline = File.Exists(BaselinePath) ? ProblemLines(File.ReadAllText(BaselinePath)) : new HashSet<string>();
         var problems = ProblemLines(output);
         var newProblems = problems.Except(baseline).OrderBy(x => x).ToList();
+        newProblemLines = newProblems;
         if (newProblems.Count > 0)
             output += "\n--- NEW problems (not in baseline) ---\n" + string.Join("\n", newProblems);
         // A check that fails without printing any recognisable problem (for example, it could not start)
@@ -212,6 +239,13 @@ void Check(string taskId, string? testCmd)
     }
     task["status"] = "failed";
     var failed = string.Join(", ", results.Where(r => !r.Ok).Select(r => r.Name));
+    // Evidence for the retro: what failed on which attempt (the first few new problem lines, not the whole log).
+    Append(task, "check_log", new JsonObject
+    {
+        ["attempt"] = attempts,
+        ["failed"] = failed,
+        ["problems"] = new JsonArray(newProblemLines.Take(5).Select(l => (JsonNode?)JsonValue.Create(l)).ToArray()),
+    });
     if (attempts >= MaxAttempts) Stop(state, $"task {taskId} failed {attempts} times ({failed}). See {LastCheckPath}.");
     Save(state);
     Console.WriteLine($"FAIL: task {taskId}, attempt {attempts} of {MaxAttempts} ({failed}).");
@@ -238,6 +272,7 @@ void Review(string taskId, bool pass, string? findings)
     task["review_findings"] = (task["review_findings"]?.GetValue<int>() ?? 0) + 1;
     task["status"] = "failed";
     var attempts = task["attempts"]!.GetValue<int>();
+    Append(task, "review_log", new JsonObject { ["attempt"] = attempts, ["findings"] = findings });
     if (attempts >= MaxAttempts) Stop(state, $"task {taskId} failed review on attempt {attempts}: {findings}");
     Save(state);
     Console.WriteLine($"REVIEW FAILED: task {taskId}, attempt {attempts} of {MaxAttempts}. Send the findings to a new implementer:");
@@ -322,7 +357,19 @@ void Finish()
     var added = Regex.Matches(depDiff, @"^\+.*(?:PackageReference|PackageVersion)\s+(?:Include|Update)=""([^""]+)""", RegexOptions.Multiline).Select(m => m.Groups[1].Value)
         .Concat(Regex.Matches(depDiff, @"^\+\s*""([@\w./-]+)""\s*:\s*""[\^~]?\d", RegexOptions.Multiline).Select(m => m.Groups[1].Value))
         .Distinct().ToList();
-    var unapproved = added.Where(dep => !planText.Contains(dep, StringComparison.OrdinalIgnoreCase)).ToList();
+    // Packages the repo already used on the base branch (for example xUnit in another test project) are not new.
+    var baseRef = BaseOf(config, state);
+    var unapproved = added
+        .Where(dep => !planText.Contains(dep, StringComparison.OrdinalIgnoreCase))
+        .Where(dep => Run("git", new[] { "grep", "-q", "-F", dep, baseRef, "--", "*.csproj", "package.json", "Directory.Packages.props" }).Item1 != 0)
+        .ToList();
+
+    // Docs check: code changed on the branch, but no Markdown outside the plan folder did.
+    var specsFolder = Folder(config, "specs", "specs");
+    var changed = Git("diff", "--name-only", $"{baseRef}...HEAD").Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Where(f => !f.StartsWith(".factory/") && !f.StartsWith(specsFolder + "/")).ToList();
+    var docsWarning = changed.Any(f => !f.EndsWith(".md")) && !changed.Any(f => f.EndsWith(".md"))
+        ? "Code changed but no docs did: is CLAUDE.md (and any README or roadmap) still right?" : null;
 
     var planCommits = Git("log", "--format=%cI", "--", plan).Split('\n', StringSplitOptions.RemoveEmptyEntries);
     var specStart = planCommits.Length > 0 ? DateTimeOffset.Parse(planCommits[^1]) : DateTimeOffset.Parse(Str(state, "started"));
@@ -350,6 +397,9 @@ void Finish()
         ["tokens_output"] = tokensOutput,
     };
     File.AppendAllText(MetricsPath, metrics.ToJsonString() + "\n");
+    Directory.CreateDirectory(LoopDir);
+    File.AppendAllText(LoopMetricsPath, metrics.ToJsonString() + "\n");
+    var retroPath = WriteRetro(state, metrics, status == "stopped", unapproved, docsWarning);
 
     // PR body: goal, scenarios with ticks, the numbers.
     var goal = Regex.Match(planText, @"^## Goal\s*\n(.*?)(?=^## )", RegexOptions.Multiline | RegexOptions.Singleline).Groups[1].Value.Trim();
@@ -361,6 +411,7 @@ void Finish()
     body.AppendLine().AppendLine("### Numbers").AppendLine().AppendLine("| Metric | Value |").AppendLine("|---|---|");
     foreach (var (k, v) in metrics) if (k != "feature" && k != "date") body.AppendLine($"| {k} | {v?.ToJsonString() ?? "n/a"} |");
     if (unapproved.Count > 0) body.AppendLine().AppendLine($"**Dependencies not in the plan:** {string.Join(", ", unapproved)}");
+    if (docsWarning != null) body.AppendLine().AppendLine($"**Docs:** {docsWarning}");
     body.AppendLine().AppendLine("### Code Evaluation").AppendLine().AppendLine("<filled in by /build>");
     File.WriteAllText(PrBodyPath, body.ToString());
 
@@ -369,6 +420,7 @@ void Finish()
     Save(state);
     Console.WriteLine(metrics.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     Console.WriteLine($"Metrics appended to {MetricsPath}. PR body written to {PrBodyPath}.");
+    Console.WriteLine($"Retro written to {retroPath}. Run /retro when you review the merge request; the next build waits for its decision.");
 }
 
 // Opens a GitHub pull request or GitLab merge request from the feature branch into the base branch.
@@ -409,9 +461,11 @@ void OpenPr(bool dryRun)
 
 void Report(int days)
 {
-    if (!File.Exists(MetricsPath)) Die("no metrics yet. They appear after the first 'factory finish'.");
+    // The shared copy also holds stopped builds whose branch was never merged.
+    var metricsFile = File.Exists(LoopMetricsPath) ? LoopMetricsPath : MetricsPath;
+    if (!File.Exists(metricsFile)) Die("no metrics yet. They appear after the first 'factory finish'.");
     var since = DateTimeOffset.Now.AddDays(-days).ToString("yyyy-MM-dd");
-    var rows = File.ReadAllLines(MetricsPath).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!)
+    var rows = File.ReadAllLines(metricsFile).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!)
         .Where(r => string.CompareOrdinal(Str(r, "date"), since) >= 0).ToList();
     if (rows.Count == 0) Die($"no features finished in the last {days} days.");
     double Avg(string k) => rows.Where(r => r[k] != null).Select(r => r[k]!.GetValue<double>()).DefaultIfEmpty(0).Average();
@@ -437,8 +491,73 @@ void Report(int days)
     Console.WriteLine($"secrets caught       {Sum("secrets_caught")}");
     Console.WriteLine($"unapproved deps      {Sum("unapproved_deps")}");
     Console.WriteLine($"tokens per feature   {Avg("tokens_total"):N0} (output {Avg("tokens_output"):N0})");
+    ImprovementsReport(metricsFile);
+}
+
+// For each retro decision: its number on the build that caused it, and the average over the builds since.
+void ImprovementsReport(string metricsFile)
+{
+    if (!File.Exists(ImprovementsPath)) return;
+    var all = File.ReadAllLines(metricsFile).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!).ToList();
+    var changes = File.ReadAllLines(ImprovementsPath).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!)
+        .Where(c => Str(c, "bucket") != "none").ToList();
+    if (changes.Count == 0) return;
     Console.WriteLine();
-    Console.WriteLine("Review: pick the worst number, choose ONE process change, record it as an ADR.");
+    Console.WriteLine("Changes from retros (before = the build that caused it, after = average of builds since):");
+    foreach (var c in changes)
+    {
+        var metric = Str(c, "metric");
+        var causedAt = all.FindLastIndex(r => Str(r, "feature") == Str(c, "feature"));
+        var since = all.Skip(causedAt + 1).Where(r => r[metric] != null).Select(r => r[metric]!.GetValue<double>()).ToList();
+        var before = c["before"]?.GetValue<double>();
+        var after = since.Count > 0 ? since.Average() : (double?)null;
+        var verdict = before == null || after == null ? "too early"
+            : after == before ? "no change"
+            : (after > before) == HigherIsBetter.Contains(metric) ? "better" : "WORSE: revert or replace it";
+        Console.WriteLine($"  {Str(c, "change")}");
+        Console.WriteLine($"    {metric}: {before?.ToString("0.##") ?? "n/a"} -> {after?.ToString("0.##") ?? "n/a"} over {since.Count} build(s): {verdict}");
+    }
+}
+
+// Records the retro decision: one change (bucket, what, which number should move) or none with a reason.
+void Decide(string? bucket, string? change, string? metric, string? place, string? none, string? feature)
+{
+    var targets = UndecidedRetros();
+    if (feature != null) targets = targets.Where(f => f == feature).ToList();
+    if (targets.Count == 0) Die(feature != null ? $"no undecided retro for {feature}." : "no retro is waiting for a decision.");
+    var target = targets[^1];
+    var path = Path.Combine(RetroDir, target + ".md");
+
+    string line;
+    var entry = new JsonObject { ["date"] = DateTimeOffset.Now.ToString("yyyy-MM-dd"), ["feature"] = target };
+    if (none != null)
+    {
+        line = $"none: {none}";
+        entry["bucket"] = "none";
+        entry["change"] = none;
+    }
+    else
+    {
+        if (bucket == null || !Buckets.Contains(bucket)) Die($"decide needs --bucket {string.Join(" | ", Buckets)} (or --none \"<reason>\").");
+        if (string.IsNullOrWhiteSpace(change)) Die("decide needs --change \"<the one change>\".");
+        var row = File.Exists(LoopMetricsPath)
+            ? File.ReadAllLines(LoopMetricsPath).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!).LastOrDefault(r => Str(r, "feature") == target)
+            : null;
+        var numeric = row?.AsObject().Where(kv => kv.Value is JsonValue v && v.TryGetValue<double>(out _)).Select(kv => kv.Key).ToList() ?? new List<string>();
+        if (metric == null || !numeric.Contains(metric))
+            Die($"decide needs --metric, the number this change should move. One of: {string.Join(", ", numeric)}");
+        line = $"{bucket}: {change} (moves {metric}, lives in {place ?? "plugin"})";
+        entry["bucket"] = bucket;
+        entry["change"] = change;
+        entry["metric"] = metric;
+        entry["where"] = place ?? "plugin";
+        entry["before"] = row![metric]!.GetValue<double>();
+    }
+    var text = File.ReadAllText(path);
+    File.WriteAllText(path, Regex.Replace(text, @"^## Decision:.*$", $"## Decision: {line}", RegexOptions.Multiline));
+    File.AppendAllText(ImprovementsPath, entry.ToJsonString() + "\n");
+    Console.WriteLine($"Decision recorded for {target}: {line}");
+    Console.WriteLine("The next build can start. 'factory report' will show whether the number moved.");
 }
 
 void Status()
@@ -536,6 +655,114 @@ int? EscapedBugs(JsonNode config, string since)
     return (total, output);
 }
 
+// Adds an entry to a list field of a JSON object, creating the list if needed.
+void Append(JsonNode node, string key, JsonNode entry)
+{
+    if (node[key] is not JsonArray list) node[key] = list = new JsonArray();
+    list.Add(entry);
+}
+
+// Retros whose "## Decision:" line is still empty, oldest first.
+List<string> UndecidedRetros() =>
+    !Directory.Exists(RetroDir) ? new List<string>()
+    : Directory.GetFiles(RetroDir, "*.md").OrderBy(File.GetLastWriteTimeUtc)
+        .Where(f => Regex.IsMatch(File.ReadAllText(f), @"^## Decision:\s*$", RegexOptions.Multiline))
+        .Select(f => Path.GetFileNameWithoutExtension(f)).ToList();
+
+// Writes the retro: the facts of this build, for the /retro conversation and the start gate.
+string WriteRetro(JsonNode state, JsonObject metrics, bool stopped, List<string> unapproved, string? docsWarning)
+{
+    Directory.CreateDirectory(RetroDir);
+    var feature = Str(state, "feature");
+    var tasks = state["tasks"]!.AsArray().Select(t => t!).ToList();
+    var md = new StringBuilder();
+    md.AppendLine($"# Retro: {feature}").AppendLine();
+    md.AppendLine($"Outcome: {(stopped ? $"STOPPED: {Str(state, "stop_reason")}" : "finished, merge request ready")}");
+    md.AppendLine($"Date: {DateTimeOffset.Now:yyyy-MM-dd} · Plan: `{Str(state, "plan")}` · Branch: `{Str(state, "branch")}`");
+    md.AppendLine($"Numbers: first try {metrics["first_pass_rate"]} · attempts per task {metrics["attempts_per_task"]} · review findings {metrics["review_findings"]} · new problems {metrics["new_problems"]}");
+    md.AppendLine().AppendLine("## Tasks").AppendLine().AppendLine("| Task | Status | Attempts | Test first |").AppendLine("|---|---|---|---|");
+    foreach (var t in tasks)
+    {
+        var red = t["red"] == null ? "no" : t["red"]!["skipped"] != null ? $"skipped ({Str(t["red"]!, "skipped")})" : "yes";
+        md.AppendLine($"| {Str(t, "id")}: {Str(t, "name")} | {Str(t, "status")} | {t["attempts"]} | {red} |");
+    }
+    md.AppendLine().AppendLine("## Evidence").AppendLine();
+    var evidence = 0;
+    foreach (var t in tasks)
+    {
+        foreach (var r in t["review_log"]?.AsArray() ?? new JsonArray())
+        {
+            md.AppendLine($"- Task {Str(t, "id")} review failed (attempt {r!["attempt"]}): {Str(r, "findings")}");
+            evidence++;
+        }
+        foreach (var c in t["check_log"]?.AsArray() ?? new JsonArray())
+        {
+            var problems = c!["problems"]?.AsArray().Select(p => p!.GetValue<string>()).ToList() ?? new List<string>();
+            md.AppendLine($"- Task {Str(t, "id")} check failed (attempt {c["attempt"]}, {Str(c, "failed")}){(problems.Count > 0 ? ": " + string.Join(" | ", problems) : "")}");
+            evidence++;
+        }
+    }
+    if (unapproved.Count > 0) { md.AppendLine($"- Dependencies not in the plan: {string.Join(", ", unapproved)}"); evidence++; }
+    if (docsWarning != null) { md.AppendLine($"- {docsWarning}"); evidence++; }
+    if (evidence == 0) md.AppendLine("- Nothing failed.");
+    md.AppendLine().AppendLine("## Buckets").AppendLine();
+    md.AppendLine("<one line per problem: spec-gap | harness-gap | rule-gap | model-slip, and why (filled in with /retro)>");
+    md.AppendLine().AppendLine("## Decision:");
+    var path = Path.Combine(RetroDir, feature + ".md");
+    File.WriteAllText(path, md.ToString());
+    return path;
+}
+
+// Checks on the approved plan that catch the gaps which cost attempts later (ADR-016). Plain text rules, no AI.
+List<string> PlanProblems(string text)
+{
+    var problems = new List<string>();
+    var lines = text.Replace("\r\n", "\n").Split('\n');
+
+    // 1. Every task names its tricky inputs as scenarios, or says why it has none.
+    var taskHeads = Regex.Matches(text, @"^###\s*Task\s+(\d+)\s*:.*$", RegexOptions.Multiline).ToList();
+    for (var i = 0; i < taskHeads.Count; i++)
+    {
+        var start = taskHeads[i].Index;
+        var nextTask = i + 1 < taskHeads.Count ? taskHeads[i + 1].Index : text.Length;
+        var bodyStart = start + taskHeads[i].Length;
+        var nextSection = Regex.Match(text[bodyStart..], @"^## ", RegexOptions.Multiline);
+        var end = nextSection.Success ? Math.Min(nextTask, bodyStart + nextSection.Index) : nextTask;
+        var section = text[start..end];
+        if (!Regex.IsMatch(section, @"Scenario:\s*Tricky\b", RegexOptions.IgnoreCase)
+            && !Regex.IsMatch(section, @"Tricky inputs:\s*none\s*\(.+\)", RegexOptions.IgnoreCase))
+            problems.Add($"Task {taskHeads[i].Groups[1].Value} has no \"Scenario: Tricky ...\" and no \"Tricky inputs: none (reason)\" line.");
+    }
+
+    // 2. The plan says how it differs from what exists today (or that it does not).
+    if (!Regex.IsMatch(text, @"^##\s*Differences from existing behaviou?r", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+        problems.Add("No \"## Differences from existing behaviour\" section (write \"none\" if there are none).");
+
+    // 3. A glossary with at least one term, so the plan's words mean one thing.
+    var glossary = Regex.Match(text, @"^##\s*Glossary\s*$(.*?)(?=^## |\z)", RegexOptions.Multiline | RegexOptions.Singleline);
+    if (!glossary.Success || !Regex.IsMatch(glossary.Groups[1].Value, @"^\|(?!\s*-)(?!\s*Term\s*\|).+\|.+\|", RegexOptions.Multiline))
+        problems.Add("No \"## Glossary\" table with at least one term.");
+
+    // 4. Every file (name.ext) or folder (ending in /) the plan mentions exists, is listed in a task's Files line (the build makes it), or is marked (new).
+    var taskFiles = lines.Where(l => Regex.IsMatch(l, @"\*\*Files:\*\*|^\s*-?\s*Files:", RegexOptions.IgnoreCase))
+        .SelectMany(l => Regex.Matches(l, "`([^`]+)`").Select(m => m.Groups[1].Value)).ToHashSet();
+    var pathLike = new Regex(@"`([^`\s<>*:]+/|[^`\s<>*:]*\.(?:cs|csproj|sln|slnx|props|targets|md|json|ps1|cmd|sh|xml|xaml|axaml|yml|yaml|config|txt|ts|js|py|go|html|css))`", RegexOptions.IgnoreCase);
+    var missing = new List<string>();
+    foreach (var line in lines)
+    {
+        if (line.Contains("(new)", StringComparison.OrdinalIgnoreCase)) continue;
+        foreach (Match m in pathLike.Matches(line))
+        {
+            var p = m.Groups[1].Value.TrimEnd('/', '.', ',');
+            if (taskFiles.Contains(m.Groups[1].Value) || File.Exists(p) || Directory.Exists(p) || missing.Contains(p)) continue;
+            missing.Add(p);
+        }
+    }
+    foreach (var p in missing)
+        problems.Add($"The plan mentions {p}, which does not exist. Create it, add it to a task's Files line, or mark the line (new).");
+    return problems;
+}
+
 string Now() => DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
 
 string Str(JsonNode node, string key) => node[key]?.GetValue<string>() ?? "";
@@ -548,7 +775,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | report [days]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | report [days]");
     Environment.Exit(1);
 }
 

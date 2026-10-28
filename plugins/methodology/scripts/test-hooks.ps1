@@ -8,6 +8,7 @@ $dir = Join-Path ([IO.Path]::GetTempPath()) ("hooks-test-" + [guid]::NewGuid().T
 New-Item -ItemType Directory $dir | Out-Null
 Push-Location $dir
 $env:CLAUDE_PROJECT_DIR = $dir
+$env:METHODOLOGY_NO_TOAST = '1'  # no Windows notifications while testing
 $bad = 0
 
 git init -q -b main
@@ -64,6 +65,11 @@ Expect "build: stop refused with open tasks"   (Hook stop '{"stop_hook_active": 
 Expect "build: stop allowed when reminded once" (Hook stop '{"stop_hook_active": true}') 0
 SetBuilding $true 'committed'
 Expect "build: stop allowed when all committed" (Hook stop '{"stop_hook_active": false}') 0
+Set-Content .factory/state.json '{"status": "stopped", "feature": "001-cart", "stop_reason": "test", "tasks": []}' -Encoding ascii
+Expect "stopped build: stop hook lets Claude end" (Hook stop '{"stop_hook_active": false}') 0
+$notified = Join-Path (git rev-parse --git-common-dir) 'factory/notified.txt'
+Expect "stopped build: you are told once"      ((Get-Content $notified) -contains '001-cart:stopped') $true
+Expect "notify hook never blocks"              (Hook notify '{"message": "waiting"}') 0
 
 # Git-level guard: runs however the commit is started.
 SetBuilding $true
@@ -81,5 +87,6 @@ Expect "pre-commit: normal commit outside a build"   $LASTEXITCODE 0
 
 Pop-Location
 Remove-Item Env:CLAUDE_PROJECT_DIR
+Remove-Item Env:METHODOLOGY_NO_TOAST
 if ($bad -eq 0) { Write-Host "`nAll checks passed. Test repo left at $dir" -ForegroundColor Green }
 else { Write-Host "`n$bad check(s) failed. Test repo left at $dir; send me the output." -ForegroundColor Red }
