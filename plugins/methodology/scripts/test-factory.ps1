@@ -29,7 +29,7 @@ Set-Content .gitignore ".factory/state.json`n.factory/last-check.txt" -Encoding 
 $good = "Status: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items picked, not paid |`n## Differences from existing behaviour`nnone`n## Tasks"
 Set-Content specs/001-cart.md "# Plan: cart`n$good`n### Task 1: add button`nTricky inputs: none (test)`n### Task 2: show total`nTricky inputs: none (test)" -Encoding ascii
 # A plan with the gaps the checks catch: no tricky inputs, no differences section, a file that does not exist.
-Set-Content specs/002-gaps.md "# Plan: gaps`nStatus: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items |`n## Tasks`n### Task 1: roadmap`nUpdate ``docs/ROADMAP.md```n### Task 2: mask passwords`nScenario: Tricky: spaces`n| Input | Output |`n|---|---|`n| a | b |`n## End-to-end check`nGiven a cart When paid Then a receipt" -Encoding ascii
+Set-Content specs/002-gaps.md "# Plan: gaps`nStatus: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items |`n## Tasks`n### Task 1: roadmap`nUpdate ``docs/ROADMAP.md```nOut of scope: moving it to a ``harness/`` branch`n### Task 2: mask passwords`nScenario: Tricky: spaces`n| Input | Output |`n|---|---|`n| a | b |`n## End-to-end check`nGiven a cart When paid Then a receipt" -Encoding ascii
 $table = "| Input | Output |`n|---|---|`n| ``SAVE10`` | 10% |`n| ``save10`` | 10% |`n| `` SAVE10 `` | 10% |`n| ``SAVE1O`` | invalid |`n| (empty) | invalid |"
 Set-Content specs/004-next.md "# Plan: next`n$good`n### Task 1: tricky`nScenario: Tricky: empty cart`n### Task 2: parse coupon codes`nScenario: Tricky: lower case`n$table`nScenario: End-to-end: pay with a coupon`n## End-to-end check`nGiven a coupon When paid Then 10% off" -Encoding ascii
 New-Item -ItemType Directory docs | Out-Null
@@ -62,6 +62,8 @@ git checkout -q -- .factory/config.json
 Expect "refuses a plan with gaps"            (F start specs/002-gaps.md) 1
 ExpectOutput "names the task without tricky inputs" @('start', 'specs/002-gaps.md') 'Task 1 has no'
 ExpectOutput "names the missing file"        @('start', 'specs/002-gaps.md') 'docs/ROADMAP.md'
+$gapsOut = & dotnet run .factory/factory.cs -- start specs/002-gaps.md 2>&1 | Out-String
+Expect "a branch name is not a missing path"  ($gapsOut -match 'mentions harness') $false
 ExpectOutput "asks for the differences section" @('start', 'specs/002-gaps.md') 'Differences from existing behaviour'
 ExpectOutput "asks for an input/output table"  @('start', 'specs/002-gaps.md') 'Task 2 parses or transforms text'
 ExpectOutput "asks a task to own the end-to-end check" @('start', 'specs/002-gaps.md') 'No task owns the end-to-end check'
