@@ -17,6 +17,7 @@ If the idea is a tiny change, a single bug, or a medium change with an obvious a
 ## 1. Idea
 - Restate the idea in 2-3 lines and ask the user to confirm.
 - Use the Explore subagent to read the relevant code, `CLAUDE.md` and `<adrs>/`, so your questions are informed and the plan respects existing decisions.
+- If this follows up a stopped build, read its retro (`git rev-parse --git-common-dir`, then `factory/retros/<feature>.md`): the Evidence and "Notes for the next spec" sections are your brief. Every finding there needs a task or a line in Out of scope.
 
 ## 2. Interview (about 10 questions max)
 - Ask ONE question at a time. Offer 2-4 likely answers plus "other" when you can.
@@ -29,6 +30,7 @@ If the idea is a tiny change, a single bug, or a medium change with an obvious a
 - Every task is small enough for one fresh subagent: a few files, one behavior.
 - Every task has at least one done-when written as **Given / When / Then**, with real example input and a result a user would notice. No vague ones like "login works".
 - Name the files and interfaces each task touches, what is out of scope, any new dependency, any decision that needs an ADR, and one end-to-end check for the whole feature.
+- Every task gets a `Scenario: Tricky:` for the input most likely to break it (ask about these in the interview), or `Tricky inputs: none (<reason>)`. List differences from existing behaviour (or "none"). `/build` refuses a plan without these, and refuses a plan that mentions a file that doesn't exist and isn't in a task's Files line or marked (new).
 
 ## 4. Approve
 - Go through the approval checklist at the end of the template with the user, item by item.

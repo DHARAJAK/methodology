@@ -1,6 +1,6 @@
 {
   "name": "methodology",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Spec-first agentic coding with Claude Code: /onboard, /spec, /build, a referee that counts attempts, hooks Claude cannot skip, and quality metrics.",
   "author": {
     "name": "Arthur Wills"

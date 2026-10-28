@@ -12,7 +12,7 @@ Build the approved plan `$ARGUMENTS`. You are a thin coordinator: subagents writ
 The referee is `dotnet run "${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs" -- <command>`, written below as `factory <command>`. The path is filled in by Claude Code and works in Bash and PowerShell alike.
 
 ## 1. Start
-- Switch to the base branch first (`base` in `.factory/config.json`; if none, the repo's `main` or `master`) and pull. Then run `factory start $ARGUMENTS`. If it refuses, tell the user why and stop.
+- Switch to the base branch first (`base` in `.factory/config.json`; if none, the repo's `main` or `master`) and pull. Exception: a plan that follows up a stopped build starts on that build's branch; `factory start` accepts that and puts both in one merge request. Then run `factory start $ARGUMENTS`. If it refuses, tell the user why and stop.
 - It creates the branch `feat/<plan>` and lists the tasks. If it says "Resuming", continue with the first task that is not committed (`factory status`).
 
 ## 2. For each task, in order
@@ -26,7 +26,9 @@ The referee is `dotnet run "${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs" -- <comman
    - **STOP**, or `factory` exits with code 2: go to step 5 (Needs you). Do not try to fix it yourself.
 3. Tell the user one line per task: "Task 2 of 5 done (attempt 1)."
 
-Never edit code yourself, never commit with git directly, never change the plan. The hooks block these anyway.
+Never edit code yourself, never commit with git directly, never change the plan. The hooks block the last two.
+
+**One run, no questions.** The user approved the plan; from here, run to the end without asking them anything. The only reasons to stop and talk to them are the ones the referee decides: `STOP` / exit code 2, a refused `start`, or a missing or signed-out `glab`/`gh`. Each ends the run with one message (step 4 or 5).
 
 ## 3. Code Evaluation (whole feature, once)
 When `factory commit` says "All tasks done":
@@ -38,11 +40,13 @@ When `factory commit` says "All tasks done":
 ## 4. Pull request (Done)
 1. Run `factory finish`. It records the 13 metrics in `.factory/metrics.jsonl` and writes `.factory/pr-body.md`.
 2. Replace "<filled in by /build>" in `.factory/pr-body.md` with: the review result, the ADR gaps found, and the end-to-end check for `/verify`.
-3. Push the branch: `git push -u origin feat/<plan>` (the user approves the prompt).
+3. Push the branch: `git push -u origin feat/<plan>` (allowed by the onboarded settings, so no prompt; pushing to the base branch stays denied).
 4. Open the pull request (GitHub) or merge request (GitLab): `factory open-pr`. The referee picks the host from the origin URL (or `host` in `.factory/config.json`) and targets the `base` branch. If it says the CLI is missing or not signed in, tell the user the exact command it printed (`glab auth login` or `gh auth login`) and stop; the branch is already pushed.
-5. Tell the user: the PR or MR link, the numbers in one line, and "Run `/verify` on the running app, read the diff, and merge it yourself."
+5. Tell the user in ONE message: the PR or MR link, the numbers in one line, the retro file `factory finish` printed, and "Run `/verify`, read the diff, merge it yourself, and run `/retro` while you are there: the next build waits for its decision."
 
 ## 5. Needs you (STOP)
-- Run `factory finish` so the stop is counted in the metrics (no PR is opened).
+- Run `factory finish` so the stop is counted in the metrics (no PR is opened). It writes the retro.
+- Save everything the follow-up `/spec` needs (each review finding with its example data, decisions to make, test cases that broke an attempt) with `factory note "<finding>"`, one call per finding. It goes into the retro, which survives the session, `/clear` and an unmerged branch. Never put build findings in the session scratchpad, a temp folder or only in your reply: those disappear.
 - Tell the user, in plain words: which task or check stopped, the reason (from `factory status` and `.factory/last-check.txt`), and that the work is kept on the branch.
-- Suggest the next step: usually the plan was unclear, so rerun `/spec` for this feature with what was learned.
+- Suggest the next step: usually the plan was unclear, so rerun `/spec` for this feature with what was learned. Point to the retro file `factory finish` printed and `/retro`: the next build waits for its decision.
+- This is the only message of the run. Do not ask the user anything earlier: everything between plan approval and this point runs without them.

@@ -1,5 +1,24 @@
 {
   "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(git push -u origin feat/*)",
+      "Bash(git push origin feat/*)",
+      "Bash(dotnet run *)",
+      "Bash(dotnet test *)",
+      "Bash(dotnet build *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "PowerShell(git push -u origin feat/*)",
+      "PowerShell(git push origin feat/*)",
+      "PowerShell(dotnet run *)",
+      "PowerShell(dotnet test *)",
+      "PowerShell(dotnet build *)",
+      "PowerShell(git status*)",
+      "PowerShell(git diff*)",
+      "PowerShell(git log*)"
+    ],
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",
@@ -24,10 +43,17 @@
       "PowerShell(git push --force *)",
       "PowerShell(git push -f *)",
       "PowerShell(git push origin main)",
-      "PowerShell(git push origin master)"
+      "PowerShell(git push origin master)",
+      "Bash(git push * main)",
+      "Bash(git push * master)",
+      "Bash(git push * HEAD:*)",
+      "Bash(git push --force-with-lease *)",
+      "PowerShell(git push * main)",
+      "PowerShell(git push * master)",
+      "PowerShell(git push * HEAD:*)",
+      "PowerShell(git push --force-with-lease *)"
     ],
     "ask": [
-      "Bash(git push *)",
       "Bash(dotnet add package *)",
       "Bash(npm install *)",
       "Bash(npm i *)",
@@ -36,7 +62,6 @@
       "Bash(pip install *)",
       "Bash(uv add *)",
       "Bash(go get *)",
-      "PowerShell(git push *)",
       "PowerShell(dotnet add package *)",
       "PowerShell(npm install *)",
       "PowerShell(npm i *)",

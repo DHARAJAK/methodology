@@ -25,7 +25,12 @@ if ($onWindows) {
 }
 Set-Content .factory/baseline.txt 'old: error in legacy.cs line 12' -Encoding ascii
 Set-Content .gitignore ".factory/state.json`n.factory/last-check.txt" -Encoding ascii
-Set-Content specs/001-cart.md "# Plan: cart`nStatus: Approved 2026-10-23`n## Tasks`n### Task 1: add button`n### Task 2: show total" -Encoding ascii
+# A plan that passes the plan checks (ADR-016): glossary, differences section, tricky inputs per task.
+$good = "Status: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items picked, not paid |`n## Differences from existing behaviour`nnone`n## Tasks"
+Set-Content specs/001-cart.md "# Plan: cart`n$good`n### Task 1: add button`nTricky inputs: none (test)`n### Task 2: show total`nTricky inputs: none (test)" -Encoding ascii
+# A plan with the gaps the checks catch: no tricky inputs, no differences section, a file that does not exist.
+Set-Content specs/002-gaps.md "# Plan: gaps`nStatus: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items |`n## Tasks`n### Task 1: roadmap`nUpdate ``docs/ROADMAP.md```n## End-to-end check`nnone" -Encoding ascii
+Set-Content specs/004-next.md "# Plan: next`n$good`n### Task 1: tricky`nScenario: Tricky: empty cart" -Encoding ascii
 New-Item -ItemType Directory docs | Out-Null
 Copy-Item specs/001-cart.md docs/001-cart.md
 git add -A; git commit -qm init
@@ -53,6 +58,10 @@ $config = Get-Content .factory/config.json -Raw
 Set-Content .factory/config.json ($config.Replace('}', ', "specs": "docs/"}')) -Encoding ascii -NoNewline
 Expect "specs folder is configurable"        (F start specs/001-cart.md) 1
 git checkout -q -- .factory/config.json
+Expect "refuses a plan with gaps"            (F start specs/002-gaps.md) 1
+ExpectOutput "names the task without tricky inputs" @('start', 'specs/002-gaps.md') 'Task 1 has no'
+ExpectOutput "names the missing file"        @('start', 'specs/002-gaps.md') 'docs/ROADMAP.md'
+ExpectOutput "asks for the differences section" @('start', 'specs/002-gaps.md') 'Differences from existing behaviour'
 Expect "start creates the branch"            (F start specs/001-cart.md) 0
 Expect "refuses commit before a pass"        (F commit 1) 1
 Expect "refuses check before a failing test" (F check 1) 1
@@ -112,8 +121,35 @@ if ($onWindows) {
     ExpectOutput "base branch is configurable"   @('open-pr', '--dry-run') '--target-branch poc/main'
     git remote set-url origin https://github.com/someone/project.git
     ExpectOutput "GitHub origin opens a PR"      @('open-pr', '--dry-run') 'gh pr create --head feat/001-cart --base poc/main'
+
+    # Improvement loop (ADR-016): finish writes a retro, and the next start waits for its decision.
+    $retro = Join-Path (git rev-parse --git-common-dir) 'factory/retros/001-cart.md'
+    Expect "finish wrote a retro"                (Test-Path $retro) $true
+    Expect "retro keeps the review findings"     ((Get-Content $retro -Raw) -match 'event raised under lock') $true
+    Set-Content .factory/config.json '{"check": "./check.ps1"}' -Encoding ascii
+    git add -A; git commit -qm "before next feature"
+    Expect "start waits for the retro decision"  (F start specs/004-next.md) 1
+    Expect "decide needs a known number"         (F decide --bucket spec-gap --change "x" --metric nope) 1
+    Expect "decide needs a known bucket"         (F decide --bucket other --change "x" --metric first_pass_rate) 1
+    Expect "decide records the change"           (F decide --bucket spec-gap --change "tasks list tricky inputs" --metric first_pass_rate) 0
+    ExpectOutput "report shows the change"       @('report') 'tasks list tricky inputs'
+    Expect "start goes ahead after the decision" (F start specs/004-next.md) 0
+
+    # A follow-up spec builds on top of a stopped build's branch; notes for it go into the retro.
+    F stop "test stop" | Out-Null
+    F finish | Out-Null
+    F decide --none "test" | Out-Null
+    ExpectOutput "note goes into the retro"      @('note', 'check the + prefix') 'Noted in'
+    Expect "note is in the retro"                ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/retros/004-next.md') -Raw) -match 'check the \+ prefix') $true
+    Set-Content .factory/config.json '{"check": "./check.ps1", "base": "main"}' -Encoding ascii
+    Set-Content specs/005-follow.md "# Plan: follow`n$good`n### Task 1: fix`nTricky inputs: none (test)" -Encoding ascii
+    git add -A; git commit -qm "follow-up plan"
+    Expect "follow-up builds on the stopped branch" (F start specs/005-follow.md) 0
 }
 
 Pop-Location
 if ($bad -eq 0) { Write-Host "`nAll checks passed. Test repo left at $dir" -ForegroundColor Green }
 else { Write-Host "`n$bad check(s) failed. Test repo left at $dir; send me the output." -ForegroundColor Red }
+
+# Non-zero exit on failure, so CI (and scripts) can tell.
+if ($bad -ne 0) { exit 1 }

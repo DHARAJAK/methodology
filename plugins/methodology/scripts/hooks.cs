@@ -7,7 +7,9 @@
 //   no-raw-commit  before a git commit: during /build, only "factory commit" may commit;
 //                  --no-verify (skipping the secrets scan) is never allowed
 //   format         after an edit: formats the changed .cs file (whitespace only, fast)
-//   stop           when Claude wants to finish: refuses while /build has uncommitted tasks
+//   stop           when Claude wants to finish: refuses while /build has uncommitted tasks;
+//                  once a build has stopped or finished, tells you with a Windows notification (once)
+//   notify         Claude Code is waiting for you (Notification event): Windows notification
 //   session-start  sets METHODOLOGY_ROOT for the session
 //
 // Exit 2 = block; the message on stderr is shown to Claude so it can correct course.
@@ -90,6 +92,13 @@ switch (hook)
         }
     case "stop":
         {
+            var status = state?["status"]?.GetValue<string>() ?? "";
+            // One run, one message: when a build ends (stopped or finished), say so once, so you need not watch it.
+            if (status is "stopped" or "stopped-recorded" or "finished" && FirstTimeFor($"{state?["feature"]}:{(status == "finished" ? "finished" : "stopped")}"))
+            {
+                if (status == "finished") Toast("Build finished", $"{state?["feature"]}: the merge request is ready for /verify and review.");
+                else Toast("Build needs you", $"{state?["feature"]} stopped: {state?["stop_reason"]}");
+            }
             if (input["stop_hook_active"]?.GetValue<bool>() == true) break; // already reminded once; don't loop
             if (!building) break;
             var open = state!["tasks"]!.AsArray()
@@ -100,8 +109,11 @@ switch (hook)
                       "Run the factory check and commit for them. If the factory printed STOP, report that to the user instead.");
             break;
         }
+    case "notify":
+        Toast("Claude Code needs you", input["message"]?.GetValue<string>() ?? "Claude is waiting for your answer.");
+        break;
     default:
-        Console.Error.WriteLine("usage: hooks.cs lock-specs | no-raw-commit | format | stop");
+        Console.Error.WriteLine("usage: hooks.cs lock-specs | no-raw-commit | format | stop | notify");
         break;
 }
 return 0;
@@ -113,6 +125,42 @@ void Block(string message)
 {
     Console.Error.WriteLine(message);
     Environment.Exit(2);
+}
+
+// True the first time a key is seen; keys are kept in the shared .git folder, so nothing shows up in git status.
+bool FirstTimeFor(string key)
+{
+    try
+    {
+        var psi = new ProcessStartInfo("git", "rev-parse --git-common-dir") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        using var p = Process.Start(psi)!;
+        var dir = Path.Combine(Path.GetFullPath(p.StandardOutput.ReadToEnd().Trim()), "factory");
+        p.WaitForExit();
+        Directory.CreateDirectory(dir);
+        var file = Path.Combine(dir, "notified.txt");
+        if (File.Exists(file) && File.ReadAllLines(file).Contains(key)) return false;
+        File.AppendAllText(file, key + "\n");
+        return true;
+    }
+    catch { return false; }
+}
+
+// A Windows notification (tray balloon). Needs no admin rights and no modules; does nothing elsewhere,
+// or when METHODOLOGY_NO_TOAST is set (the tests set it). Never waits for it and never fails a hook.
+void Toast(string title, string text)
+{
+    if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("METHODOLOGY_NO_TOAST") != null) return;
+    string Quote(string v) => "'" + v.Replace("'", "''") + "'";
+    var script = "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; " +
+                 "$n = New-Object System.Windows.Forms.NotifyIcon; $n.Icon = [System.Drawing.SystemIcons]::Information; $n.Visible = $true; " +
+                 $"$n.ShowBalloonTip(10000, {Quote(title)}, {Quote(text.Length > 200 ? text[..200] : text)}, 'Info'); Start-Sleep 10; $n.Dispose()";
+    try
+    {
+        var psi = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in new[] { "-NoProfile", "-WindowStyle", "Hidden", "-Command", script }) psi.ArgumentList.Add(a);
+        Process.Start(psi);
+    }
+    catch { /* a missed notification must never break the hook */ }
 }
 
 void Run(string file, params string[] argList)
