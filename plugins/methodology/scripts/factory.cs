@@ -828,6 +828,9 @@ List<string> PlanProblems(string text)
         if (line.Contains("(new)", StringComparison.OrdinalIgnoreCase)) continue;
         foreach (Match m in pathLike.Matches(line))
         {
+            // A lone `name/` is as often a branch (`harness/`, `feat/`) as a folder: only paths with a folder in them
+            // (`docs/drafts/`) or a file extension are checked.
+            if (m.Groups[1].Value.EndsWith('/') && m.Groups[1].Value.TrimEnd('/').IndexOf('/') < 0) continue;
             var p = m.Groups[1].Value.TrimEnd('/', '.', ',');
             if (taskFiles.Contains(m.Groups[1].Value) || File.Exists(p) || Directory.Exists(p) || missing.Contains(p)) continue;
             missing.Add(p);
