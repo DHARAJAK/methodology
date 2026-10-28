@@ -117,6 +117,11 @@ void Start(string plan)
 
     if (Git("status", "--porcelain", "--untracked-files=no") != "")
         Die("working tree has uncommitted changes. Commit or stash them first.");
+    // Untracked files that are already lying around (drafts, notes, an uncommitted metrics.jsonl) are not part of
+    // this feature: remember them so "factory commit" never sweeps them into a task commit.
+    var leftOut = new JsonArray();
+    foreach (var f in Git("ls-files", "--others", "--exclude-standard").Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        leftOut.Add(JsonValue.Create(f.Trim()));
 
     var tasks = new JsonArray();
     foreach (Match m in Regex.Matches(text, @"^###\s*Task\s+(\d+)\s*:\s*(.+?)\s*$", RegexOptions.Multiline))
@@ -159,11 +164,14 @@ void Start(string plan)
         ["started"] = Now(),
         ["ended"] = null,
         ["tasks"] = tasks,
+        ["left_out"] = leftOut,
     };
     Save(state);
     Console.WriteLine($"Started {feature} on branch {branch} with {tasks.Count} tasks.");
     if (stackedOn != null) Console.WriteLine($"Built on top of the stopped build {Str(stackedOn, "feature")}: its commits go into the same merge request, into {baseBranch}.");
     foreach (var t in tasks) Console.WriteLine($"  Task {Str(t!, "id")}: {Str(t!, "name")}");
+    if (leftOut.Count > 0)
+        Console.WriteLine($"Note: {leftOut.Count} untracked file(s) were already here (for example {leftOut[0]}). They stay out of every task commit.");
 }
 
 // Test first: the task's new tests must fail before any code is written, or they do not test the new behaviour.
@@ -313,6 +321,9 @@ void Commit(string taskId, string? message)
     if (!PlanUnchanged(state)) Stop(state, "the plan changed during the build. Rerun /spec.");
 
     Git("add", "-A");
+    // Keep files that were untracked before the build out of the commit (see Start).
+    var keepOut = (state["left_out"]?.AsArray() ?? new JsonArray()).Select(n => n!.GetValue<string>()).Where(File.Exists).ToList();
+    if (keepOut.Count > 0) Git(new[] { "reset", "-q", "--" }.Concat(keepOut).ToArray());
     var msg = $"task {taskId}: {message ?? Str(task, "name")}";
     // FACTORY_COMMIT lets the "no raw commit" hook allow this commit.
     var (rc, rout) = Run("git", new[] { "commit", "-m", msg }, new() { ["FACTORY_COMMIT"] = "1" });

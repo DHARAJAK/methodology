@@ -62,6 +62,7 @@ Expect "refuses a plan with gaps"            (F start specs/002-gaps.md) 1
 ExpectOutput "names the task without tricky inputs" @('start', 'specs/002-gaps.md') 'Task 1 has no'
 ExpectOutput "names the missing file"        @('start', 'specs/002-gaps.md') 'docs/ROADMAP.md'
 ExpectOutput "asks for the differences section" @('start', 'specs/002-gaps.md') 'Differences from existing behaviour'
+Set-Content draft.md 'old notes, not part of the feature'
 Expect "start creates the branch"            (F start specs/001-cart.md) 0
 Expect "refuses commit before a pass"        (F commit 1) 1
 Expect "refuses check before a failing test" (F check 1) 1
@@ -73,6 +74,7 @@ Set-Content b.txt 'y'
 Expect "refuses commit if files changed"     (F commit 1) 1
 Expect "re-check passes"                     (F check 1) 0
 Expect "commit after a pass"                 (F commit 1) 0
+Expect "old untracked files stay out of commits" ((git show --name-only --format= HEAD) -contains 'draft.md') $false
 New-Item BAD -ItemType File | Out-Null
 Expect "red can be skipped with a reason"    (F red 2 --skip "no behaviour to test") 0
 Expect "new error fails (attempt 1)"         (F check 2) 1
