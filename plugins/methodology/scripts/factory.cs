@@ -16,7 +16,7 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- decide --bucket spec-gap --change "..." --metric first_pass_rate [--where plugin]
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- decide --none "reason"   (the retro decision; start waits for it)
-//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- note "finding"           (adds to the newest retro, for the next /spec)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- note "finding" | note --file f (adds to the newest retro, for the next /spec)
 //
 // .factory/config.json: "check" (required), "reviewer" (agent name), "host" ("gitlab" | "github", default
 // from the origin URL), "base" (branch PRs/MRs target, default "main"), "specs" (plan folder, default
@@ -52,6 +52,8 @@ Directory.CreateDirectory(Factory);
 // every worktree sees the same ones, and they are never pushed.
 string LoopDir = Path.Combine(Path.GetFullPath(Git("rev-parse", "--git-common-dir")), "factory");
 string RetroDir = Path.Combine(LoopDir, "retros");
+const string TextTaskWords = @"\b(pars(e|es|ed|er|ing)|redact\w*|mask\w*|saniti[sz]\w*|escap\w*|normali[sz]\w*|validat\w*|regex\w*|deserializ\w*)\b";
+const int MinInputRows = 5;
 string LoopMetricsPath = Path.Combine(LoopDir, "metrics.jsonl");
 string ImprovementsPath = Path.Combine(LoopDir, "improvements.jsonl");
 // Metrics where higher is better; for every other number lower is better.
@@ -69,7 +71,7 @@ switch (args[0])
     case "status": Status(); break;
     case "finish": Finish(); break;
     case "open-pr": OpenPr(args.Contains("--dry-run")); break;
-    case "note": if (args.Length < 2) Usage(); Note(args[1]); break;
+    case "note": if (args.Length < 2) Usage(); Note(NoteText()); break;
     case "decide": Decide(Option("--bucket"), Option("--change"), Option("--metric"), Option("--where"), Option("--none"), Option("--feature")); break;
     case "stop": StopCommand(args.Length > 1 ? args[1] : "stopped by /build"); break;
     case "report": Report(args.Length > 1 && int.TryParse(args[1], out var d) ? d : 14); break;
@@ -540,6 +542,12 @@ void ImprovementsReport(string metricsFile)
 }
 
 // Adds a finding to the newest retro, the one permanent place for what the next /spec must know.
+// The finding as typed, from a file (--file path) or standard input (-): shells cut quoted text in arguments.
+string NoteText() =>
+    args[1] == "--file" && args.Length > 2 ? File.ReadAllText(args[2]).Trim()
+    : args[1] == "-" ? Console.In.ReadToEnd().Trim()
+    : string.Join(' ', args.Skip(1));
+
 void Note(string text)
 {
     var latest = Directory.Exists(RetroDir) ? Directory.GetFiles(RetroDir, "*.md").OrderBy(File.GetLastWriteTimeUtc).LastOrDefault() : null;
@@ -766,7 +774,19 @@ List<string> PlanProblems(string text)
         if (!Regex.IsMatch(section, @"Scenario:\s*Tricky\b", RegexOptions.IgnoreCase)
             && !Regex.IsMatch(section, @"Tricky inputs:\s*none\s*\(.+\)", RegexOptions.IgnoreCase))
             problems.Add($"Task {taskHeads[i].Groups[1].Value} has no \"Scenario: Tricky ...\" and no \"Tricky inputs: none (reason)\" line.");
+        // A task that parses, masks or checks text gets an exact input -> output table: a few loose scenarios let
+        // reviewers find the next leak one attempt at a time (retro 002, log masking).
+        if (Regex.IsMatch(section, TextTaskWords, RegexOptions.IgnoreCase)
+            && InputTableRows(section) < MinInputRows
+            && !Regex.IsMatch(section, @"Input table:\s*none\s*\(.+\)", RegexOptions.IgnoreCase))
+            problems.Add($"Task {taskHeads[i].Groups[1].Value} parses or transforms text but has no input -> output table with at least {MinInputRows} rows (| Input | Output |), and no \"Input table: none (reason)\" line.");
     }
+
+    // 1b. The end-to-end check belongs to a task, so it gets a test instead of being left to /verify.
+    var e2e = Regex.Match(text, @"^##\s*End-to-end check\s*$(.*?)(?=^## |\z)", RegexOptions.Multiline | RegexOptions.Singleline);
+    if (e2e.Success && !Regex.IsMatch(e2e.Groups[1].Value.Trim(), @"^none\b", RegexOptions.IgnoreCase)
+        && !Regex.IsMatch(text, @"Scenario:\s*End-to-end\b", RegexOptions.IgnoreCase))
+        problems.Add("No task owns the end-to-end check. Add it to a task as \"Scenario: End-to-end: ...\" so it gets a test (or write \"none (reason)\" under the section).");
 
     // 2. The plan says how it differs from what exists today (or that it does not).
     if (!Regex.IsMatch(text, @"^##\s*Differences from existing behaviou?r", RegexOptions.Multiline | RegexOptions.IgnoreCase))
@@ -797,6 +817,21 @@ List<string> PlanProblems(string text)
     return problems;
 }
 
+// Rows of a markdown table whose header has an Input and an Output column (the separator row is not counted).
+int InputTableRows(string section)
+{
+    var rows = 0;
+    var inTable = false;
+    foreach (var raw in section.Replace("\r\n", "\n").Split('\n'))
+    {
+        var line = raw.Trim();
+        if (!line.StartsWith('|')) { inTable = false; continue; }
+        if (Regex.IsMatch(line, @"^\|\s*Input\b.*\|\s*(Expected\s+)?Output\b", RegexOptions.IgnoreCase)) { inTable = true; continue; }
+        if (inTable && !Regex.IsMatch(line, @"^\|[\s:|-]+\|$")) rows++;
+    }
+    return rows;
+}
+
 string Now() => DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
 
 string Str(JsonNode node, string key) => node[key]?.GetValue<string>() ?? "";
@@ -809,7 +844,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | report [days]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [days]");
     Environment.Exit(1);
 }
 

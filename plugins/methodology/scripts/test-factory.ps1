@@ -29,8 +29,9 @@ Set-Content .gitignore ".factory/state.json`n.factory/last-check.txt" -Encoding 
 $good = "Status: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items picked, not paid |`n## Differences from existing behaviour`nnone`n## Tasks"
 Set-Content specs/001-cart.md "# Plan: cart`n$good`n### Task 1: add button`nTricky inputs: none (test)`n### Task 2: show total`nTricky inputs: none (test)" -Encoding ascii
 # A plan with the gaps the checks catch: no tricky inputs, no differences section, a file that does not exist.
-Set-Content specs/002-gaps.md "# Plan: gaps`nStatus: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items |`n## Tasks`n### Task 1: roadmap`nUpdate ``docs/ROADMAP.md```n## End-to-end check`nnone" -Encoding ascii
-Set-Content specs/004-next.md "# Plan: next`n$good`n### Task 1: tricky`nScenario: Tricky: empty cart" -Encoding ascii
+Set-Content specs/002-gaps.md "# Plan: gaps`nStatus: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items |`n## Tasks`n### Task 1: roadmap`nUpdate ``docs/ROADMAP.md```n### Task 2: mask passwords`nScenario: Tricky: spaces`n| Input | Output |`n|---|---|`n| a | b |`n## End-to-end check`nGiven a cart When paid Then a receipt" -Encoding ascii
+$table = "| Input | Output |`n|---|---|`n| ``SAVE10`` | 10% |`n| ``save10`` | 10% |`n| `` SAVE10 `` | 10% |`n| ``SAVE1O`` | invalid |`n| (empty) | invalid |"
+Set-Content specs/004-next.md "# Plan: next`n$good`n### Task 1: tricky`nScenario: Tricky: empty cart`n### Task 2: parse coupon codes`nScenario: Tricky: lower case`n$table`nScenario: End-to-end: pay with a coupon`n## End-to-end check`nGiven a coupon When paid Then 10% off" -Encoding ascii
 New-Item -ItemType Directory docs | Out-Null
 Copy-Item specs/001-cart.md docs/001-cart.md
 git add -A; git commit -qm init
@@ -62,6 +63,8 @@ Expect "refuses a plan with gaps"            (F start specs/002-gaps.md) 1
 ExpectOutput "names the task without tricky inputs" @('start', 'specs/002-gaps.md') 'Task 1 has no'
 ExpectOutput "names the missing file"        @('start', 'specs/002-gaps.md') 'docs/ROADMAP.md'
 ExpectOutput "asks for the differences section" @('start', 'specs/002-gaps.md') 'Differences from existing behaviour'
+ExpectOutput "asks for an input/output table"  @('start', 'specs/002-gaps.md') 'Task 2 parses or transforms text'
+ExpectOutput "asks a task to own the end-to-end check" @('start', 'specs/002-gaps.md') 'No task owns the end-to-end check'
 Set-Content draft.md 'old notes, not part of the feature'
 Expect "start creates the branch"            (F start specs/001-cart.md) 0
 Expect "refuses commit before a pass"        (F commit 1) 1
@@ -143,6 +146,10 @@ if ($onWindows) {
     F decide --none "test" | Out-Null
     ExpectOutput "note goes into the retro"      @('note', 'check the + prefix') 'Noted in'
     Expect "note is in the retro"                ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/retros/004-next.md') -Raw) -match 'check the \+ prefix') $true
+    Set-Content note.txt 'leaks {\"password\":\"x\"} in escaped JSON' -Encoding ascii
+    ExpectOutput "note reads a file"             @('note', '--file', 'note.txt') 'Noted in'
+    Expect "quotes survive in a note"            ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/retros/004-next.md') -Raw).Contains('{\"password\":\"x\"}')) $true
+    Remove-Item note.txt
     Set-Content .factory/config.json '{"check": "./check.ps1", "base": "main"}' -Encoding ascii
     Set-Content specs/005-follow.md "# Plan: follow`n$good`n### Task 1: fix`nTricky inputs: none (test)" -Encoding ascii
     git add -A; git commit -qm "follow-up plan"

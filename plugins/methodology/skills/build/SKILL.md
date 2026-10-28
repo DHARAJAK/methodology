@@ -46,7 +46,7 @@ When `factory commit` says "All tasks done":
 
 ## 5. Needs you (STOP)
 - Run `factory finish` so the stop is counted in the metrics (no PR is opened). It writes the retro.
-- Save everything the follow-up `/spec` needs (each review finding with its example data, decisions to make, test cases that broke an attempt) with `factory note "<finding>"`, one call per finding. It goes into the retro, which survives the session, `/clear` and an unmerged branch. Never put build findings in the session scratchpad, a temp folder or only in your reply: those disappear.
+- Save everything the follow-up `/spec` needs (each review finding with its example data, decisions to make, test cases that broke an attempt) with `factory note`, one call per finding. A finding with quotes or example data goes through a file so the shell can't cut it: write it to `.factory/note.txt`, then `factory note --file .factory/note.txt`. It goes into the retro, which survives the session, `/clear` and an unmerged branch. Never put build findings in the session scratchpad, a temp folder or only in your reply: those disappear.
 - Tell the user, in plain words: which task or check stopped, the reason (from `factory status` and `.factory/last-check.txt`), and that the work is kept on the branch.
 - Suggest the next step: usually the plan was unclear, so rerun `/spec` for this feature with what was learned. Point to the retro file `factory finish` printed and `/retro`: the next build waits for its decision.
 - This is the only message of the run. Do not ask the user anything earlier: everything between plan approval and this point runs without them.

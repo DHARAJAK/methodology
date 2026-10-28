@@ -31,6 +31,14 @@ If the idea is a tiny change, a single bug, or a medium change with an obvious a
 - Every task has at least one done-when written as **Given / When / Then**, with real example input and a result a user would notice. No vague ones like "login works".
 - Name the files and interfaces each task touches, what is out of scope, any new dependency, any decision that needs an ADR, and one end-to-end check for the whole feature.
 - Every task gets a `Scenario: Tricky:` for the input most likely to break it (ask about these in the interview), or `Tricky inputs: none (<reason>)`. List differences from existing behaviour (or "none"). `/build` refuses a plan without these, and refuses a plan that mentions a file that doesn't exist and isn't in a task's Files line or marked (new).
+- **Adversarial pass, for any task that parses, masks, redacts, escapes, normalizes or validates text** (`/build` spots these by those words). Before approval, play the attacker: list at least 5 awkward inputs for the task (other spellings and casing, quotes and escaped quotes, JSON and `key=value` forms, separators such as `:` `=` `=>` `:=`, numbers in names, spaces, empty values, line breaks, very long input, and every case a past retro or review found). Ask the user to accept, change or drop each one, one question at a time. Each accepted input becomes a row of an exact table in the task's Done-when, with the exact output, not a description:
+  ```
+  | Input | Output |
+  |---|---|
+  | `password2=hunter2` | `password2=***` |
+  ```
+  `/build` refuses such a task with fewer than 5 rows, unless it says `Input table: none (<reason>)`. When a decision is the user's (is `nonce` a secret?), ask it here; never leave it for the build.
+- The end-to-end check belongs to a task: write it again in that task as `Scenario: End-to-end: ...`, so it gets a test. `/build` refuses a plan whose end-to-end check no task owns (unless the section says `none (<reason>)`).
 
 ## 4. Approve
 - Go through the approval checklist at the end of the template with the user, item by item.
