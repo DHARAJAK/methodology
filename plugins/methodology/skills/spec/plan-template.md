@@ -38,12 +38,22 @@ Spec number: <NNN>
   Then <what must happen>
   ```
   (Only for a task with no awkward input at all, such as docs only: replace the Tricky scenario with a line "Tricky inputs: none" followed by the reason in brackets.)
+- **Input → output** (only for a task that parses, masks, redacts, escapes, normalizes or validates text; at least 5 rows from the adversarial pass, each one exact):
+  | Input | Output |
+  |---|---|
+  | `<awkward input>` | `<exact result>` |
+
+### Task N: <the task that owns the end-to-end check>
+- **Done when:** ... plus
+  ```
+  Scenario: End-to-end: <the scenario from "End-to-end check" below>
+  ```
 
 ### Task 2: <name>
 ...
 
 ## End-to-end check
-<one Given/When/Then scenario for the whole feature, run at the end>
+<one Given/When/Then scenario for the whole feature. A task repeats it as "Scenario: End-to-end:", so it gets a test>
 
 ## Assumptions
 <anything still assumed after the interview, or "none">
@@ -61,5 +71,6 @@ Spec number: <NNN>
 - [ ] Every file the plan mentions exists, is in a task's Files line, or is marked (new).
 - [ ] Differences from existing behaviour are listed (or "none").
 - [ ] If behaviour changes, a task updates `CLAUDE.md` and the docs that describe it.
-- [ ] There is one end-to-end check.
+- [ ] There is one end-to-end check, and a task owns it (`Scenario: End-to-end:`).
+- [ ] Every task that parses, masks or validates text has an input → output table of at least 5 exact rows, from the adversarial pass.
 - [ ] Optional: the customer has read the scenarios.
