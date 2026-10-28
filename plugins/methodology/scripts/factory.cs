@@ -550,7 +550,22 @@ string NoteText() =>
 
 void Note(string text)
 {
-    var latest = Directory.Exists(RetroDir) ? Directory.GetFiles(RetroDir, "*.md").OrderBy(File.GetLastWriteTimeUtc).LastOrDefault() : null;
+    // A note belongs to the current build, whatever order /build runs note and finish in: before finish it waits
+    // in state.json and finish writes it into the retro; after finish it goes straight into that build's retro.
+    var state = File.Exists(StatePath) ? LoadJson(StatePath, "") : null;
+    var recorded = state != null && Str(state, "status") is "finished" or "stopped-recorded";
+    if (state != null && !recorded)
+    {
+        var notes = state["notes"]?.AsArray() ?? new JsonArray();
+        notes.Add(JsonValue.Create(text));
+        state["notes"] = notes;
+        Save(state);
+        Console.WriteLine($"Noted for the {Str(state, "feature")} retro (written by 'factory finish').");
+        return;
+    }
+    var own = state != null ? Path.Combine(RetroDir, Str(state, "feature") + ".md") : null;
+    var latest = own != null && File.Exists(own) ? own
+        : Directory.Exists(RetroDir) ? Directory.GetFiles(RetroDir, "*.md").OrderBy(File.GetLastWriteTimeUtc).LastOrDefault() : null;
     if (latest == null) Die("no retro yet. Notes go into the retro that 'factory finish' writes.");
     var md = File.ReadAllText(latest);
     const string heading = "## Notes for the next spec";
@@ -747,6 +762,12 @@ string WriteRetro(JsonNode state, JsonObject metrics, bool stopped, List<string>
     if (unapproved.Count > 0) { md.AppendLine($"- Dependencies not in the plan: {string.Join(", ", unapproved)}"); evidence++; }
     if (docsWarning != null) { md.AppendLine($"- {docsWarning}"); evidence++; }
     if (evidence == 0) md.AppendLine("- Nothing failed.");
+    var notes = state["notes"]?.AsArray().Select(n => n!.GetValue<string>()).ToList() ?? new List<string>();
+    if (notes.Count > 0)
+    {
+        md.AppendLine().AppendLine("## Notes for the next spec").AppendLine();
+        foreach (var n in notes) md.AppendLine("- " + n.Replace("\r", "").Replace("\n", "\n  "));
+    }
     md.AppendLine().AppendLine("## Buckets").AppendLine();
     md.AppendLine("<one line per problem: spec-gap | harness-gap | rule-gap | model-slip, and why (filled in with /retro)>");
     md.AppendLine().AppendLine("## Decision:");
