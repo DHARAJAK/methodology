@@ -1,0 +1,24 @@
+# Runs the referee and hook tests on Windows (the platform the plugin targets) for every PR and push to main.
+name: tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Git identity for the throwaway test repos
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+      - name: Referee tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File plugins/methodology/scripts/test-factory.ps1
+      - name: Hook tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File plugins/methodology/scripts/test-hooks.ps1

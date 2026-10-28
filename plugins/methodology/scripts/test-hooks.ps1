@@ -90,3 +90,6 @@ Remove-Item Env:CLAUDE_PROJECT_DIR
 Remove-Item Env:METHODOLOGY_NO_TOAST
 if ($bad -eq 0) { Write-Host "`nAll checks passed. Test repo left at $dir" -ForegroundColor Green }
 else { Write-Host "`n$bad check(s) failed. Test repo left at $dir; send me the output." -ForegroundColor Red }
+
+# Non-zero exit on failure, so CI (and scripts) can tell.
+if ($bad -ne 0) { exit 1 }
