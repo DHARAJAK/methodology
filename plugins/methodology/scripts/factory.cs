@@ -21,7 +21,7 @@
 // .factory/config.json: "check" (required), "reviewer" (agent name), "host" ("gitlab" | "github", default
 // from the origin URL), "base" (branch PRs/MRs target, default "main"), "specs" (plan folder, default
 // "specs"), "adrs" (ADR folder for /spec and /build, default "docs/adr").
-//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- report [days] (summary for the 2-weekly review)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- report [--days N] [--html] (summary; --html writes and opens a page with charts)
 //
 // Improvement loop (ADR-016): finish writes a retro to <git common dir>/factory/retros/, shared by all
 // worktrees and never pushed. The next start refuses until 'decide' records what changes because of it.
@@ -74,7 +74,7 @@ switch (args[0])
     case "note": if (args.Length < 2) Usage(); Note(NoteText()); break;
     case "decide": Decide(Option("--bucket"), Option("--change"), Option("--metric"), Option("--where"), Option("--none"), Option("--feature")); break;
     case "stop": StopCommand(args.Length > 1 ? args[1] : "stopped by /build"); break;
-    case "report": Report(args.Length > 1 && int.TryParse(args[1], out var d) ? d : 14); break;
+    case "report": Report(int.TryParse(Option("--days") ?? (args.Length > 1 ? args[1] : ""), out var d) ? d : 14, args.Contains("--html")); break;
     default: Usage(); break;
 }
 return 0;
@@ -93,6 +93,11 @@ void Start(string plan)
     var specs = Folder(LoadJson(ConfigPath, "Run /onboard first."), "specs", "specs");
     if (!RepoPath(plan).StartsWith(specs + "/"))
         Die($"plans live in {specs}/ (\"specs\" in {ConfigPath}), where the hooks lock them during /build. Move the plan there.");
+    var earlier = SameGoalPlans(plan, text, specs);
+    if (earlier.Count > 0)
+        Console.WriteLine($"Warning: {earlier.Count} earlier plan(s) have the same title \"{PlanTitle(text)}\" ({string.Join(", ", earlier)}). " +
+            $"This is try {earlier.Count + 1} at the same goal. If those builds stopped, the design may be the problem, not the plan: " +
+            "rethink the approach (a library that already does it, a different design) before building again.");
 
     if (File.Exists(StatePath))
     {
@@ -168,6 +173,7 @@ void Start(string plan)
         ["ended"] = null,
         ["tasks"] = tasks,
         ["left_out"] = leftOut,
+        ["same_goal_tries"] = earlier.Count + 1,
     };
     Save(state);
     Console.WriteLine($"Started {feature} on branch {branch} with {tasks.Count} tasks.");
@@ -398,21 +404,30 @@ void Finish()
     var specStart = planCommits.Length > 0 ? DateTimeOffset.Parse(planCommits[^1]) : DateTimeOffset.Parse(Str(state, "started"));
     var (tokensTotal, tokensOutput) = Tokens(DateTimeOffset.Parse(Str(state, "started")));
     var committed = tasks.Where(t => Str(t, "status") == "committed").ToList();
+    // Tasks a stopped build never reached have 0 attempts: leave them out, or they pull every rate down.
+    var tried = tasks.Where(t => t["attempts"]!.GetValue<int>() > 0).ToList();
+    var taskMinutes = committed.Where(t => t["started"] != null && t["ended"] != null)
+        .Select(t => (DateTimeOffset.Parse(Str(t, "ended")) - DateTimeOffset.Parse(Str(t, "started"))).TotalMinutes).ToList();
 
     var metrics = new JsonObject
     {
         ["feature"] = Str(state, "feature"),
         ["date"] = DateTimeOffset.Now.ToString("yyyy-MM-dd"),
         ["tasks"] = tasks.Count,
-        ["first_pass_rate"] = Ratio(committed.Count(t => t["attempts"]!.GetValue<int>() == 1), tasks.Count),
-        ["attempts_per_task"] = Ratio(tasks.Sum(t => t["attempts"]!.GetValue<int>()), tasks.Count),
+        ["tasks_reached"] = tried.Count,
+        ["tasks_committed"] = committed.Count,
+        ["first_pass_rate"] = Ratio(committed.Count(t => t["attempts"]!.GetValue<int>() == 1), tried.Count),
+        ["attempts_per_task"] = Ratio(tried.Sum(t => t["attempts"]!.GetValue<int>()), tried.Count),
         ["needs_you"] = status == "stopped" ? 1 : 0,
         ["spec_bounces"] = Math.Max(0, planCommits.Length - 1),
         ["spec_to_pr_hours"] = Math.Round((DateTimeOffset.Now - specStart).TotalHours, 1),
+        ["build_hours"] = Math.Round((DateTimeOffset.Now - DateTimeOffset.Parse(Str(state, "started"))).TotalHours, 1),
+        ["minutes_per_task"] = taskMinutes.Count > 0 ? JsonValue.Create(Math.Round(taskMinutes.Average(), 0)) : null,
+        ["same_goal_tries"] = state["same_goal_tries"]?.GetValue<int>() ?? 1,
         ["new_problems"] = newProblems,
         ["complexity_warnings"] = complexity,
-        ["done_when_coverage"] = Ratio(committed.Count(t => t["has_test"]?.GetValue<bool>() == true), tasks.Count),
-        ["test_first_rate"] = Ratio(committed.Count(t => t["red"]?["test"] != null), tasks.Count),
+        ["done_when_coverage"] = Ratio(committed.Count(t => t["has_test"]?.GetValue<bool>() == true), committed.Count),
+        ["test_first_rate"] = Ratio(committed.Count(t => t["red"]?["test"] != null), committed.Count),
         ["review_findings"] = tasks.Sum(t => t["review_findings"]?.GetValue<int>() ?? 0),
         ["secrets_caught"] = state["secrets_caught"]?.GetValue<int>() ?? 0,
         ["unapproved_deps"] = unapproved.Count,
@@ -489,7 +504,7 @@ void OpenPr(bool dryRun)
     }
 }
 
-void Report(int days)
+void Report(int days, bool html)
 {
     // The shared copy also holds stopped builds whose branch was never merged.
     var metricsFile = File.Exists(LoopMetricsPath) ? LoopMetricsPath : MetricsPath;
@@ -504,36 +519,62 @@ void Report(int days)
     var config = LoadJson(ConfigPath, "Run /onboard first.");
     var escaped = EscapedBugs(config, since);
     var reverts = Git("log", $"--since={since}", "--grep=^Revert", "--oneline").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+    var repeats = rows.Count(r => (r["same_goal_tries"]?.GetValue<int>() ?? 1) > 1);
+
+    var lines = new List<(string Name, string Value)>
+    {
+        ("first-pass rate", $"{Avg("first_pass_rate"):P0}"),
+        ("attempts per task", $"{Avg("attempts_per_task"):0.0}"),
+        ("needs-you", $"{Sum("needs_you")} of {rows.Count}"),
+        ("repeat tries", $"{repeats} of {rows.Count} (plans with the same title as an earlier plan)"),
+        ("spec bounces", $"{Sum("spec_bounces")}"),
+        ("spec-to-PR (median)", $"{medianHours:0.0}h"),
+        ("build hours (avg)", rows.Any(r => r["build_hours"] != null) ? $"{Avg("build_hours"):0.0}h" : "n/a (recorded from v0.1.12)"),
+        ("minutes per task", rows.Any(r => r["minutes_per_task"] != null) ? $"{Avg("minutes_per_task"):0}" : "n/a (recorded from v0.1.12)"),
+        ("new problems", $"{Sum("new_problems")}"),
+        ("complexity warnings", $"{Sum("complexity_warnings")}"),
+        ("done-when coverage", $"{Avg("done_when_coverage"):P0}"),
+        ("test-first rate", $"{Avg("test_first_rate"):P0}"),
+        ("review findings", $"{Sum("review_findings")}"),
+        ("escaped bugs", escaped?.ToString() ?? $"n/a (needs {(HostOf(config) == "gitlab" ? "glab" : "gh")}, signed in)"),
+        ("reverts", $"{reverts}"),
+        ("secrets caught", $"{Sum("secrets_caught")}"),
+        ("unapproved deps", $"{Sum("unapproved_deps")}"),
+        ("tokens per feature", $"{Avg("tokens_total"):N0} (output {Avg("tokens_output"):N0})"),
+    };
+    var changes = Improvements(metricsFile);
 
     Console.WriteLine($"Last {days} days · {rows.Count} features · {Sum("tasks")} tasks");
-    Console.WriteLine($"first-pass rate      {Avg("first_pass_rate"):P0}");
-    Console.WriteLine($"attempts per task    {Avg("attempts_per_task"):0.0}");
-    Console.WriteLine($"needs-you            {Sum("needs_you")} of {rows.Count}");
-    Console.WriteLine($"spec bounces         {Sum("spec_bounces")}");
-    Console.WriteLine($"spec-to-PR (median)  {medianHours:0.0}h");
-    Console.WriteLine($"new problems         {Sum("new_problems")}");
-    Console.WriteLine($"complexity warnings  {Sum("complexity_warnings")}");
-    Console.WriteLine($"done-when coverage   {Avg("done_when_coverage"):P0}");
-    Console.WriteLine($"test-first rate      {Avg("test_first_rate"):P0}");
-    Console.WriteLine($"review findings      {Sum("review_findings")}");
-    Console.WriteLine($"escaped bugs         {escaped?.ToString() ?? $"n/a (needs {(HostOf(config) == "gitlab" ? "glab" : "gh")}, signed in)"}");
-    Console.WriteLine($"reverts              {reverts}");
-    Console.WriteLine($"secrets caught       {Sum("secrets_caught")}");
-    Console.WriteLine($"unapproved deps      {Sum("unapproved_deps")}");
-    Console.WriteLine($"tokens per feature   {Avg("tokens_total"):N0} (output {Avg("tokens_output"):N0})");
-    ImprovementsReport(metricsFile);
+    foreach (var (name, value) in lines) Console.WriteLine($"{name,-21}{value}");
+    if (changes.Count > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Changes from retros (before = the build that caused it, after = average of builds since):");
+        foreach (var c in changes)
+        {
+            Console.WriteLine($"  {c.Change}");
+            Console.WriteLine($"    {c.Metric}: {c.Before?.ToString("0.##") ?? "n/a"} -> {c.After?.ToString("0.##") ?? "n/a"} over {c.Builds} build(s): {c.Verdict}");
+        }
+    }
+    if (!html) return;
+
+    var page = Path.Combine(LoopDir, "report.html");
+    File.WriteAllText(page, HtmlReport(days, rows, lines, changes));
+    Console.WriteLine();
+    Console.WriteLine($"Report page written to {page}");
+    // Opens in the default browser on Windows; the tests set METHODOLOGY_NO_OPEN.
+    if (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("METHODOLOGY_NO_OPEN") == null)
+        try { Process.Start(new ProcessStartInfo(page) { UseShellExecute = true }); } catch { }
 }
 
 // For each retro decision: its number on the build that caused it, and the average over the builds since.
-void ImprovementsReport(string metricsFile)
+List<(string Change, string Metric, double? Before, double? After, int Builds, string Verdict)> Improvements(string metricsFile)
 {
-    if (!File.Exists(ImprovementsPath)) return;
+    var result = new List<(string, string, double?, double?, int, string)>();
+    if (!File.Exists(ImprovementsPath)) return result;
     var all = File.ReadAllLines(metricsFile).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!).ToList();
     var changes = File.ReadAllLines(ImprovementsPath).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!)
         .Where(c => Str(c, "bucket") != "none").ToList();
-    if (changes.Count == 0) return;
-    Console.WriteLine();
-    Console.WriteLine("Changes from retros (before = the build that caused it, after = average of builds since):");
     foreach (var c in changes)
     {
         var metric = Str(c, "metric");
@@ -544,9 +585,113 @@ void ImprovementsReport(string metricsFile)
         var verdict = before == null || after == null ? "too early"
             : after == before ? "no change"
             : (after > before) == HigherIsBetter.Contains(metric) ? "better" : "WORSE: revert or replace it";
-        Console.WriteLine($"  {Str(c, "change")}");
-        Console.WriteLine($"    {metric}: {before?.ToString("0.##") ?? "n/a"} -> {after?.ToString("0.##") ?? "n/a"} over {since.Count} build(s): {verdict}");
+        result.Add((Str(c, "change"), metric, before, after, since.Count, verdict));
     }
+    return result;
+}
+
+// One self-contained page: summary numbers, a bar chart per number across builds, every build, every retro change.
+string HtmlReport(int days, List<JsonNode> rows, List<(string Name, string Value)> lines,
+    List<(string Change, string Metric, double? Before, double? After, int Builds, string Verdict)> changes)
+{
+    string E(string t) => System.Net.WebUtility.HtmlEncode(t);
+    double? N(JsonNode r, string k) => r[k] == null ? null : r[k]!.GetValue<double>();
+    var h = new StringBuilder();
+    h.AppendLine("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Build report</title><style>");
+    h.AppendLine(":root{--bg:#f6f7f9;--card:#fff;--ink:#1b2230;--muted:#5a6476;--line:#dde2ea;--bar:#3d6fd8;--bad:#c2410c;--good:#15803d}");
+    h.AppendLine("@media (prefers-color-scheme:dark){:root{--bg:#12161d;--card:#1a2029;--ink:#e3e8f0;--muted:#9aa4b5;--line:#2c3442;--bar:#7aa2f7;--bad:#fb923c;--good:#4ade80}}");
+    h.AppendLine("body{background:var(--bg);color:var(--ink);font:15px/1.5 'Segoe UI',system-ui,sans-serif;margin:0;padding:24px max(16px,4vw)}");
+    h.AppendLine("h1{font-size:24px;margin:0 0 4px}h2{font-size:18px;margin:32px 0 10px}.muted{color:var(--muted)}");
+    h.AppendLine(".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-width:0}");
+    h.AppendLine(".card h3{font-size:14px;margin:0 0 6px}.wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}");
+    h.AppendLine("th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;white-space:nowrap}td.t{white-space:normal}.bad{color:var(--bad);font-weight:600}.good{color:var(--good);font-weight:600}");
+    h.AppendLine("svg text{fill:var(--muted);font-size:10px}</style></head><body>");
+    h.AppendLine($"<h1>Build report</h1><p class=\"muted\">Last {days} days · {rows.Count} builds · written {DateTimeOffset.Now:yyyy-MM-dd HH:mm}. Rerun <code>factory report --html</code> to refresh.</p>");
+
+    h.AppendLine("<h2>Summary</h2><div class=\"card wrap\"><table>");
+    foreach (var (name, value) in lines) h.AppendLine($"<tr><th>{E(name)}</th><td>{E(value)}</td></tr>");
+    h.AppendLine("</table></div>");
+
+    var charts = new (string Key, string Title)[]
+    {
+        ("needs_you", "Stopped for you (1 = stopped)"), ("first_pass_rate", "First-pass rate (higher is better)"),
+        ("attempts_per_task", "Attempts per task (1.0 is best)"), ("build_hours", "Build hours"),
+        ("minutes_per_task", "Minutes per task"), ("review_findings", "Review findings"),
+        ("same_goal_tries", "Try number at the same goal"), ("tokens_total", "Tokens per build"),
+    };
+    h.AppendLine("<h2>Across builds (oldest to newest)</h2><div class=\"grid\">");
+    foreach (var (key, title) in charts)
+    {
+        var values = rows.Select(r => N(r, key)).ToList();
+        if (values.All(v => v == null)) continue;
+        double max = Math.Max(values.Max(v => v ?? 0), key.EndsWith("_rate") ? 1 : 0.0001);
+        const int W = 300, H = 110, Top = 14, Bottom = 18;
+        var bw = (double)W / values.Count;
+        h.AppendLine($"<div class=\"card\"><h3>{E(title)}</h3><svg viewBox=\"0 0 {W} {H}\" width=\"100%\" role=\"img\" aria-label=\"{E(title)}\">");
+        for (var i = 0; i < values.Count; i++)
+        {
+            var x = i * bw + bw * 0.15;
+            var label = Str(rows[i], "feature");
+            label = label.Length > 3 ? label[..3] : label;
+            if (values[i] is double v)
+            {
+                var bh = (H - Top - Bottom) * v / max;
+                var shown = key.EndsWith("_rate") ? $"{v:P0}" : key == "tokens_total" ? $"{v / 1e6:0.#}M" : $"{v:0.#}";
+                h.AppendLine($"<rect x=\"{x:0.#}\" y=\"{H - Bottom - bh:0.#}\" width=\"{bw * 0.7:0.#}\" height=\"{bh:0.#}\" fill=\"var(--bar)\"><title>{E(Str(rows[i], "feature"))}: {shown}</title></rect>");
+                h.AppendLine($"<text x=\"{x + bw * 0.35:0.#}\" y=\"{H - Bottom - bh - 3:0.#}\" text-anchor=\"middle\">{shown}</text>");
+            }
+            h.AppendLine($"<text x=\"{x + bw * 0.35:0.#}\" y=\"{H - 5}\" text-anchor=\"middle\">{E(label)}</text>");
+        }
+        h.AppendLine("</svg></div>");
+    }
+    h.AppendLine("</div>");
+
+    var cols = new[] { "date", "tasks", "tasks_reached", "tasks_committed", "needs_you", "first_pass_rate", "attempts_per_task", "build_hours", "minutes_per_task", "review_findings", "same_goal_tries", "tokens_total" };
+    h.AppendLine("<h2>Every build</h2><div class=\"card wrap\"><table><tr><th>feature</th>" + string.Join("", cols.Select(c => $"<th>{c.Replace('_', ' ')}</th>")) + "</tr>");
+    foreach (var r in rows)
+    {
+        h.Append($"<tr><td>{E(Str(r, "feature"))}</td>");
+        foreach (var c in cols)
+        {
+            var cell = r[c] == null ? "" : r[c]!.GetValueKind() == JsonValueKind.String ? Str(r, c) : c.EndsWith("_rate") ? $"{r[c]!.GetValue<double>():P0}" : c == "tokens_total" ? $"{r[c]!.GetValue<double>():N0}" : r[c]!.ToJsonString();
+            var css = c == "needs_you" && cell == "1" ? " class=\"bad\"" : c == "same_goal_tries" && N(r, c) > 1 ? " class=\"bad\"" : "";
+            h.Append($"<td{css}>{E(cell)}</td>");
+        }
+        h.AppendLine("</tr>");
+    }
+    h.AppendLine("</table></div>");
+
+    if (changes.Count > 0)
+    {
+        h.AppendLine("<h2>Changes from retros</h2><div class=\"card wrap\"><table><tr><th>change</th><th>number</th><th>before</th><th>after</th><th>builds since</th><th>verdict</th></tr>");
+        foreach (var c in changes)
+        {
+            var css = c.Verdict.StartsWith("WORSE") ? "bad" : c.Verdict == "better" ? "good" : "muted";
+            h.AppendLine($"<tr><td class=\"t\">{E(c.Change)}</td><td>{E(c.Metric)}</td><td>{c.Before?.ToString("0.##") ?? "n/a"}</td><td>{c.After?.ToString("0.##") ?? "n/a"}</td><td>{c.Builds}</td><td class=\"{css}\">{E(c.Verdict)}</td></tr>");
+        }
+        h.AppendLine("</table></div>");
+    }
+    h.AppendLine("</body></html>");
+    return h.ToString();
+}
+
+// The plan's title: its first "# ..." heading without a leading "Plan:".
+string PlanTitle(string text)
+{
+    var m = Regex.Match(text, @"^#\s+(?:Plan:\s*)?(.+?)\s*$", RegexOptions.Multiline);
+    return m.Success ? m.Groups[1].Value : "";
+}
+
+// Other plans in the specs folder with the same title: each one is an earlier try at the same goal.
+List<string> SameGoalPlans(string plan, string text, string specsFolder)
+{
+    var title = PlanTitle(text);
+    if (title == "" || !Directory.Exists(specsFolder)) return new List<string>();
+    var self = Path.GetFullPath(plan);
+    return Directory.GetFiles(specsFolder, "*.md")
+        .Where(f => Path.GetFullPath(f) != self)
+        .Where(f => string.Equals(PlanTitle(File.ReadAllText(f)), title, StringComparison.OrdinalIgnoreCase))
+        .Select(f => Path.GetFileName(f)).OrderBy(f => f).ToList();
 }
 
 // Adds a finding to the newest retro, the one permanent place for what the next /spec must know.
@@ -876,7 +1021,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [days]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [--days N] [--html]");
     Environment.Exit(1);
 }
 
