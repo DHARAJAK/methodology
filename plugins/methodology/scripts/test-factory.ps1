@@ -141,6 +141,11 @@ if ($onWindows) {
     Expect "decide needs a known bucket"         (F decide --bucket other --change "x" --metric first_pass_rate) 1
     Expect "decide records the change"           (F decide --bucket spec-gap --change "tasks list tricky inputs" --metric first_pass_rate) 0
     ExpectOutput "report shows the change"       @('report') 'tasks list tricky inputs'
+    Expect "finish skips unreached tasks"        ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/metrics.jsonl') -Raw) -match '"tasks_reached"') $true
+    ExpectOutput "report reads --days"           @('report', '--days', '30') 'Last 30 days'
+    $env:METHODOLOGY_NO_OPEN = '1'
+    ExpectOutput "report --html writes a page"   @('report', '--days', '30', '--html') 'Report page written'
+    Expect "the page lists every build"          ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/report.html') -Raw) -match 'Every build') $true
     Expect "start goes ahead after the decision" (F start specs/004-next.md) 0
 
     # A follow-up spec builds on top of a stopped build's branch; notes for it go into the retro.
@@ -161,6 +166,9 @@ if ($onWindows) {
     Set-Content specs/005-follow.md "# Plan: follow`n$good`n### Task 1: fix`nTricky inputs: none (test)" -Encoding ascii
     git add -A; git commit -qm "follow-up plan"
     Expect "follow-up builds on the stopped branch" (F start specs/005-follow.md) 0
+    Set-Content specs/006-follow-again.md "# Plan: follow`n$good`n### Task 1: fix again`nTricky inputs: none (test)" -Encoding ascii
+    git add -A; git commit -qm "same goal again"
+    ExpectOutput "warns about a repeated title"  @('start', 'specs/006-follow-again.md') 'try 2 at the same goal'
 }
 
 Pop-Location

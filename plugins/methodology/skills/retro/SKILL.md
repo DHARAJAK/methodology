@@ -33,4 +33,4 @@ Ask the user to confirm or change the buckets, one question at a time.
 - or `factory decide --none "<why nothing changes>"`
 - Fill in the retro's `## Buckets` section with the lines from step 2.
 - Tell the user where the change will be made. A plugin change is a pull request to the methodology repo; a repo change is a small commit or `/spec` in this repo. Don't make the change in this conversation unless the user asks.
-- `factory report` later shows whether the number moved. If it got worse after a few builds, the next retro reverts or replaces the change.
+- `factory report` later shows whether the number moved (`factory report --html` opens the same numbers as charts across builds). If it got worse after a few builds, the next retro reverts or replaces the change.
