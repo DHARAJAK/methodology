@@ -11,6 +11,7 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- review 1 --pass | --fail "findings" (when config names a reviewer)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- commit 1 -m "add-to-cart button"
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- status
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- task   1   (only what task 1 needs from the plan: saves tokens per subagent)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- stop "reason" (Code Evaluation failed: hand back to you)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- finish        (end of feature: metrics + PR body)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
@@ -37,6 +38,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 const int MaxAttempts = 3; // first try + 2 reworks (ADR-004)
+const int MaxPlanWords = 2500; // above this, start warns: every subagent pays for the shared sections
 const string Factory = ".factory";
 string StatePath = Path.Combine(Factory, "state.json");
 string ConfigPath = Path.Combine(Factory, "config.json");
@@ -69,6 +71,7 @@ switch (args[0])
     case "review": if (args.Length < 2) Usage(); Review(args[1], args.Contains("--pass"), Option("--fail")); break;
     case "commit": if (args.Length < 2) Usage(); Commit(args[1], Option("-m")); break;
     case "status": Status(); break;
+    case "task": if (args.Length < 2) Usage(); TaskBrief(args[1]); break;
     case "finish": Finish(); break;
     case "open-pr": OpenPr(args.Contains("--dry-run")); break;
     case "note": if (args.Length < 2) Usage(); Note(NoteText()); break;
@@ -95,9 +98,13 @@ void Start(string plan)
         Die($"plans live in {specs}/ (\"specs\" in {ConfigPath}), where the hooks lock them during /build. Move the plan there.");
     var earlier = SameGoalPlans(plan, text, specs);
     if (earlier.Count > 0)
-        Console.WriteLine($"Warning: {earlier.Count} earlier plan(s) have the same title \"{PlanTitle(text)}\" ({string.Join(", ", earlier)}). " +
+        Console.WriteLine($"Warning: {earlier.Count} earlier plan(s) have the same goal \"{PlanTitle(text)}\" ({string.Join(", ", earlier)}). " +
             $"This is try {earlier.Count + 1} at the same goal. If those builds stopped, the design may be the problem, not the plan: " +
             "rethink the approach (a library that already does it, a different design) before building again.");
+    var planWords = Regex.Matches(text, @"\S+").Count;
+    if (planWords > MaxPlanWords)
+        Console.WriteLine($"Warning: the plan is {planWords} words (aim for under {MaxPlanWords}). Every implementer and reviewer reads its shared sections, " +
+            "so a long glossary or design costs tokens on every task. Split the plan, or move rules into code and tests.");
 
     if (File.Exists(StatePath))
     {
@@ -519,6 +526,13 @@ void Report(int days, bool html)
     var config = LoadJson(ConfigPath, "Run /onboard first.");
     var escaped = EscapedBugs(config, since);
     var reverts = Git("log", $"--since={since}", "--grep=^Revert", "--oneline").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+    // Builds recorded before v0.1.12 have no try number: work it out from the plans still in the specs folder.
+    var specsFolder = Folder(config, "specs", "specs");
+    foreach (var r in rows.Where(r => r["same_goal_tries"] == null))
+    {
+        var planFile = Path.Combine(specsFolder, Str(r, "feature") + ".md");
+        if (File.Exists(planFile)) r["same_goal_tries"] = SameGoalPlans(planFile, File.ReadAllText(planFile), specsFolder, true).Count + 1;
+    }
     var repeats = rows.Count(r => (r["same_goal_tries"]?.GetValue<int>() ?? 1) > 1);
 
     var lines = new List<(string Name, string Value)>
@@ -526,7 +540,7 @@ void Report(int days, bool html)
         ("first-pass rate", $"{Avg("first_pass_rate"):P0}"),
         ("attempts per task", $"{Avg("attempts_per_task"):0.0}"),
         ("needs-you", $"{Sum("needs_you")} of {rows.Count}"),
-        ("repeat tries", $"{repeats} of {rows.Count} (plans with the same title as an earlier plan)"),
+        ("repeat tries", $"{repeats} of {rows.Count} (plans with the same goal as an earlier plan)"),
         ("spec bounces", $"{Sum("spec_bounces")}"),
         ("spec-to-PR (median)", $"{medianHours:0.0}h"),
         ("build hours (avg)", rows.Any(r => r["build_hours"] != null) ? $"{Avg("build_hours"):0.0}h" : "n/a (recorded from v0.1.12)"),
@@ -562,9 +576,12 @@ void Report(int days, bool html)
     File.WriteAllText(page, HtmlReport(days, rows, lines, changes));
     Console.WriteLine();
     Console.WriteLine($"Report page written to {page}");
-    // Opens in the default browser on Windows; the tests set METHODOLOGY_NO_OPEN.
+    Console.WriteLine($"Open it again any time with: start \"{page}\"");
+    // Opens in the default browser on Windows through Explorer, which follows the .html file association
+    // even where shell-execute from a console app does nothing. The tests set METHODOLOGY_NO_OPEN.
     if (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("METHODOLOGY_NO_OPEN") == null)
-        try { Process.Start(new ProcessStartInfo(page) { UseShellExecute = true }); } catch { }
+        try { Process.Start(new ProcessStartInfo("explorer.exe", $"\"{page}\"") { UseShellExecute = false }); }
+        catch (Exception e) { Console.WriteLine($"Could not open it automatically ({e.Message})."); }
 }
 
 // For each retro decision: its number on the build that caused it, and the average over the builds since.
@@ -682,15 +699,34 @@ string PlanTitle(string text)
     return m.Success ? m.Groups[1].Value : "";
 }
 
-// Other plans in the specs folder with the same title: each one is an earlier try at the same goal.
-List<string> SameGoalPlans(string plan, string text, string specsFolder)
+// Title words that name the goal: "Caller-number fixes (after the stopped 006 build)" and
+// "Caller-number fixes, after the stopped 007 build" both become "caller number fixes".
+string[] GoalWords(string title)
+{
+    var t = Regex.Replace(title.ToLowerInvariant(), @"\(.*?\)", " ");
+    t = Regex.Replace(t, @",?\s+after\b.*$", "");
+    return Regex.Split(t, @"[^a-z0-9]+").Where(w => w != "" && !w.All(char.IsDigit)).ToArray();
+}
+
+// Same goal: the same words, or one title's words start the other's (at least two words), so follow-up suffixes still match.
+bool SameGoal(string a, string b)
+{
+    var (wa, wb) = (GoalWords(a), GoalWords(b));
+    var n = Math.Min(wa.Length, wb.Length);
+    return n > 0 && wa.Take(n).SequenceEqual(wb.Take(n)) && (n >= 2 || wa.Length == wb.Length);
+}
+
+// Other plans in the specs folder with the same goal: each one is an earlier try at it.
+// With "before", only plans whose file name sorts before it (the report uses this for builds recorded before v0.1.12).
+List<string> SameGoalPlans(string plan, string text, string specsFolder, bool onlyEarlier = false)
 {
     var title = PlanTitle(text);
     if (title == "" || !Directory.Exists(specsFolder)) return new List<string>();
     var self = Path.GetFullPath(plan);
     return Directory.GetFiles(specsFolder, "*.md")
         .Where(f => Path.GetFullPath(f) != self)
-        .Where(f => string.Equals(PlanTitle(File.ReadAllText(f)), title, StringComparison.OrdinalIgnoreCase))
+        .Where(f => !onlyEarlier || string.CompareOrdinal(Path.GetFileName(f), Path.GetFileName(plan)) < 0)
+        .Where(f => SameGoal(PlanTitle(File.ReadAllText(f)), title))
         .Select(f => Path.GetFileName(f)).OrderBy(f => f).ToList();
 }
 
@@ -768,6 +804,27 @@ void Decide(string? bucket, string? change, string? metric, string? place, strin
     File.AppendAllText(ImprovementsPath, entry.ToJsonString() + "\n");
     Console.WriteLine($"Decision recorded for {target}: {line}");
     Console.WriteLine("The next build can start. 'factory report' will show whether the number moved.");
+}
+
+// The part of the plan one task needs: the shared sections plus that task, never the other tasks,
+// assumptions or checklist. Each implementer and reviewer reads this instead of the whole plan.
+void TaskBrief(string taskId)
+{
+    var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
+    var text = File.ReadAllText(Str(state, "plan"));
+    FindTask(state, taskId);
+    string Section(string heading)
+    {
+        var m = Regex.Match(text, $@"^##\s+{heading}\b.*?(?=^##\s|\z)", RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        return m.Success ? m.Value.TrimEnd() + "\n\n" : "";
+    }
+    var task = Regex.Match(text, $@"^###\s*Task\s+{Regex.Escape(taskId)}\s*:.*?(?=^###?\s|\z)", RegexOptions.Multiline | RegexOptions.Singleline);
+    var sb = new StringBuilder();
+    sb.AppendLine($"Plan: {Str(state, "plan")} (only the parts task {taskId} needs)").AppendLine();
+    foreach (var h in new[] { "Goal", "Glossary", "Scope", "Out of scope", "Differences from existing behaviour", "Design" }) sb.Append(Section(h));
+    sb.AppendLine(task.Value.TrimEnd());
+    if (Regex.IsMatch(task.Value, @"Scenario:\s*End-to-end", RegexOptions.IgnoreCase)) sb.AppendLine().Append(Section("End-to-end check"));
+    Console.WriteLine(sb.ToString().TrimEnd());
 }
 
 void Status()
@@ -1021,7 +1078,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [--days N] [--html]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | task <task> | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [--days N] [--html]");
     Environment.Exit(1);
 }
 
