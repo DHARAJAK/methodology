@@ -11,6 +11,7 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- review 1 --pass | --fail "findings" (when config names a reviewer)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- commit 1 -m "add-to-cart button"
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- status
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- task   1   (only what task 1 needs from the plan: saves tokens per subagent)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- stop "reason" (Code Evaluation failed: hand back to you)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- finish        (end of feature: metrics + PR body)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
@@ -37,6 +38,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 const int MaxAttempts = 3; // first try + 2 reworks (ADR-004)
+const int MaxPlanWords = 2500; // above this, start warns: every subagent pays for the shared sections
 const string Factory = ".factory";
 string StatePath = Path.Combine(Factory, "state.json");
 string ConfigPath = Path.Combine(Factory, "config.json");
@@ -69,6 +71,7 @@ switch (args[0])
     case "review": if (args.Length < 2) Usage(); Review(args[1], args.Contains("--pass"), Option("--fail")); break;
     case "commit": if (args.Length < 2) Usage(); Commit(args[1], Option("-m")); break;
     case "status": Status(); break;
+    case "task": if (args.Length < 2) Usage(); TaskBrief(args[1]); break;
     case "finish": Finish(); break;
     case "open-pr": OpenPr(args.Contains("--dry-run")); break;
     case "note": if (args.Length < 2) Usage(); Note(NoteText()); break;
@@ -98,6 +101,10 @@ void Start(string plan)
         Console.WriteLine($"Warning: {earlier.Count} earlier plan(s) have the same goal \"{PlanTitle(text)}\" ({string.Join(", ", earlier)}). " +
             $"This is try {earlier.Count + 1} at the same goal. If those builds stopped, the design may be the problem, not the plan: " +
             "rethink the approach (a library that already does it, a different design) before building again.");
+    var planWords = Regex.Matches(text, @"\S+").Count;
+    if (planWords > MaxPlanWords)
+        Console.WriteLine($"Warning: the plan is {planWords} words (aim for under {MaxPlanWords}). Every implementer and reviewer reads its shared sections, " +
+            "so a long glossary or design costs tokens on every task. Split the plan, or move rules into code and tests.");
 
     if (File.Exists(StatePath))
     {
@@ -799,6 +806,27 @@ void Decide(string? bucket, string? change, string? metric, string? place, strin
     Console.WriteLine("The next build can start. 'factory report' will show whether the number moved.");
 }
 
+// The part of the plan one task needs: the shared sections plus that task, never the other tasks,
+// assumptions or checklist. Each implementer and reviewer reads this instead of the whole plan.
+void TaskBrief(string taskId)
+{
+    var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
+    var text = File.ReadAllText(Str(state, "plan"));
+    FindTask(state, taskId);
+    string Section(string heading)
+    {
+        var m = Regex.Match(text, $@"^##\s+{heading}\b.*?(?=^##\s|\z)", RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        return m.Success ? m.Value.TrimEnd() + "\n\n" : "";
+    }
+    var task = Regex.Match(text, $@"^###\s*Task\s+{Regex.Escape(taskId)}\s*:.*?(?=^###?\s|\z)", RegexOptions.Multiline | RegexOptions.Singleline);
+    var sb = new StringBuilder();
+    sb.AppendLine($"Plan: {Str(state, "plan")} (only the parts task {taskId} needs)").AppendLine();
+    foreach (var h in new[] { "Goal", "Glossary", "Scope", "Out of scope", "Differences from existing behaviour", "Design" }) sb.Append(Section(h));
+    sb.AppendLine(task.Value.TrimEnd());
+    if (Regex.IsMatch(task.Value, @"Scenario:\s*End-to-end", RegexOptions.IgnoreCase)) sb.AppendLine().Append(Section("End-to-end check"));
+    Console.WriteLine(sb.ToString().TrimEnd());
+}
+
 void Status()
 {
     var state = LoadJson(StatePath, "No build in progress.");
@@ -1050,7 +1078,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [--days N] [--html]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | task <task> | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [--days N] [--html]");
     Environment.Exit(1);
 }
 

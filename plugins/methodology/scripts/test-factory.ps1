@@ -69,6 +69,10 @@ ExpectOutput "asks for an input/output table"  @('start', 'specs/002-gaps.md') '
 ExpectOutput "asks a task to own the end-to-end check" @('start', 'specs/002-gaps.md') 'No task owns the end-to-end check'
 Set-Content draft.md 'old notes, not part of the feature'
 Expect "start creates the branch (@path too)" (F start '@specs/001-cart.md') 0
+ExpectOutput "task prints its own task"     @('task', '1') 'Task 1: add button'
+$brief = & dotnet run .factory/factory.cs -- task 1 2>&1 | Out-String
+Expect "task leaves out the other tasks"     ($brief -match 'Task 2: show total') $false
+Expect "task keeps the glossary"             ($brief -match 'items picked, not paid') $true
 Expect "refuses commit before a pass"        (F commit 1) 1
 Expect "refuses check before a failing test" (F check 1) 1
 Expect "rejects tests that already pass"     (F red 1 --test "exit 0") 1

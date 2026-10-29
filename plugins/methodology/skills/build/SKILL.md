@@ -17,9 +17,9 @@ The referee is `dotnet run "${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs" -- <comman
 - It creates the branch `feat/<plan>` and lists the tasks. If it says "Resuming", continue with the first task that is not committed (`factory status`).
 
 ## 2. For each task, in order
-1. Launch a **fresh `implementer` subagent** with only: the plan path, the task number, and the referee path `${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs`.
+1. Launch a **fresh `implementer` subagent** with only: the plan path, the task number, and the referee path `${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs`. It runs on Sonnet; if `.factory/config.json` has `"models": {"implementer": "<model>"}`, pass that model instead.
 2. When it reports:
-   - **PASS**, and `.factory/config.json` names a `reviewer` agent: launch that agent (fresh, read-only) on the task's uncommitted changes (`git diff HEAD` plus new files) with the plan path and task number. It checks the project's own rules. Then record its verdict:
+   - **PASS**, and `.factory/config.json` names a `reviewer` agent: launch that agent (fresh, read-only) on the task's uncommitted changes (`git diff HEAD` plus new files) with the task number and the output of `factory task <task>` (not the whole plan), on the model in `"models": {"reviewer": "<model>"}` if set, otherwise Sonnet. It checks the project's own rules. Then record its verdict:
      - no real problems: `factory review <task> --pass`, then `factory commit <task>`.
      - real problems: `factory review <task> --fail "<one-line summary>"`, and send the findings to a **new** implementer for the same task. If `factory` exits with code 2, go to step 5.
    - **PASS** and no `reviewer` configured: run `factory commit <task>`.
