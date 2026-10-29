@@ -166,9 +166,16 @@ if ($onWindows) {
     Set-Content specs/005-follow.md "# Plan: follow`n$good`n### Task 1: fix`nTricky inputs: none (test)" -Encoding ascii
     git add -A; git commit -qm "follow-up plan"
     Expect "follow-up builds on the stopped branch" (F start specs/005-follow.md) 0
-    Set-Content specs/006-follow-again.md "# Plan: follow`n$good`n### Task 1: fix again`nTricky inputs: none (test)" -Encoding ascii
+    Set-Content specs/006-follow-again.md "# Plan: Follow, after the stopped 005 build`n$good`n### Task 1: fix again`nTricky inputs: none (test)" -Encoding ascii
     git add -A; git commit -qm "same goal again"
-    ExpectOutput "warns about a repeated title"  @('start', 'specs/006-follow-again.md') 'try 2 at the same goal'
+    ExpectOutput "warns about a repeated goal"   @('start', 'specs/006-follow-again.md') 'try 2 at the same goal'
+    # Builds recorded before v0.1.12 have no try number: report works it out from the plans in the specs folder.
+    F stop "test stop" | Out-Null; F finish | Out-Null
+    Set-Content specs/003-old.md "# Plan: Follow up fixes" -Encoding ascii
+    Set-Content specs/007-x.md "# Plan: Follow up fixes (after the stopped 006 build)" -Encoding ascii
+    $loop = Join-Path (git rev-parse --git-common-dir) 'factory/metrics.jsonl'
+    Add-Content $loop ('{"feature": "007-x", "date": "' + (Get-Date -Format 'yyyy-MM-dd') + '", "tasks": 1, "spec_to_pr_hours": 1}') -Encoding ascii
+    ExpectOutput "report counts older repeat tries" @('report', '--days', '30') 'repeat tries\s+1 of'
 }
 
 Pop-Location

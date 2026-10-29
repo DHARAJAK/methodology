@@ -13,7 +13,7 @@ The referee is `dotnet run "${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs" -- <comman
 
 ## 1. Start
 - Switch to the base branch first (`base` in `.factory/config.json`; if none, the repo's `main` or `master`) and pull. Exception: a plan that follows up a stopped build starts on that build's branch; `factory start` accepts that and puts both in one merge request. Then run `factory start $ARGUMENTS`. If it refuses, tell the user why and stop.
-- If it prints "try N at the same goal" (earlier plans have the same title), tell the user. At try 3 or more, stop before Task 1 and ask whether to build anyway: repeated stops on one goal usually mean the design needs to change, not the plan.
+- If it prints "try N at the same goal" (earlier plans have the same goal in their title, follow-up suffixes like "after the stopped 006 build" ignored), tell the user. At try 3 or more, stop before Task 1 and ask whether to build anyway: repeated stops on one goal usually mean the design needs to change, not the plan.
 - It creates the branch `feat/<plan>` and lists the tasks. If it says "Resuming", continue with the first task that is not committed (`factory status`).
 
 ## 2. For each task, in order

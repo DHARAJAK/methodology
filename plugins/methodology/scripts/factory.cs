@@ -95,7 +95,7 @@ void Start(string plan)
         Die($"plans live in {specs}/ (\"specs\" in {ConfigPath}), where the hooks lock them during /build. Move the plan there.");
     var earlier = SameGoalPlans(plan, text, specs);
     if (earlier.Count > 0)
-        Console.WriteLine($"Warning: {earlier.Count} earlier plan(s) have the same title \"{PlanTitle(text)}\" ({string.Join(", ", earlier)}). " +
+        Console.WriteLine($"Warning: {earlier.Count} earlier plan(s) have the same goal \"{PlanTitle(text)}\" ({string.Join(", ", earlier)}). " +
             $"This is try {earlier.Count + 1} at the same goal. If those builds stopped, the design may be the problem, not the plan: " +
             "rethink the approach (a library that already does it, a different design) before building again.");
 
@@ -519,6 +519,13 @@ void Report(int days, bool html)
     var config = LoadJson(ConfigPath, "Run /onboard first.");
     var escaped = EscapedBugs(config, since);
     var reverts = Git("log", $"--since={since}", "--grep=^Revert", "--oneline").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+    // Builds recorded before v0.1.12 have no try number: work it out from the plans still in the specs folder.
+    var specsFolder = Folder(config, "specs", "specs");
+    foreach (var r in rows.Where(r => r["same_goal_tries"] == null))
+    {
+        var planFile = Path.Combine(specsFolder, Str(r, "feature") + ".md");
+        if (File.Exists(planFile)) r["same_goal_tries"] = SameGoalPlans(planFile, File.ReadAllText(planFile), specsFolder, true).Count + 1;
+    }
     var repeats = rows.Count(r => (r["same_goal_tries"]?.GetValue<int>() ?? 1) > 1);
 
     var lines = new List<(string Name, string Value)>
@@ -526,7 +533,7 @@ void Report(int days, bool html)
         ("first-pass rate", $"{Avg("first_pass_rate"):P0}"),
         ("attempts per task", $"{Avg("attempts_per_task"):0.0}"),
         ("needs-you", $"{Sum("needs_you")} of {rows.Count}"),
-        ("repeat tries", $"{repeats} of {rows.Count} (plans with the same title as an earlier plan)"),
+        ("repeat tries", $"{repeats} of {rows.Count} (plans with the same goal as an earlier plan)"),
         ("spec bounces", $"{Sum("spec_bounces")}"),
         ("spec-to-PR (median)", $"{medianHours:0.0}h"),
         ("build hours (avg)", rows.Any(r => r["build_hours"] != null) ? $"{Avg("build_hours"):0.0}h" : "n/a (recorded from v0.1.12)"),
@@ -562,9 +569,12 @@ void Report(int days, bool html)
     File.WriteAllText(page, HtmlReport(days, rows, lines, changes));
     Console.WriteLine();
     Console.WriteLine($"Report page written to {page}");
-    // Opens in the default browser on Windows; the tests set METHODOLOGY_NO_OPEN.
+    Console.WriteLine($"Open it again any time with: start \"{page}\"");
+    // Opens in the default browser on Windows through Explorer, which follows the .html file association
+    // even where shell-execute from a console app does nothing. The tests set METHODOLOGY_NO_OPEN.
     if (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("METHODOLOGY_NO_OPEN") == null)
-        try { Process.Start(new ProcessStartInfo(page) { UseShellExecute = true }); } catch { }
+        try { Process.Start(new ProcessStartInfo("explorer.exe", $"\"{page}\"") { UseShellExecute = false }); }
+        catch (Exception e) { Console.WriteLine($"Could not open it automatically ({e.Message})."); }
 }
 
 // For each retro decision: its number on the build that caused it, and the average over the builds since.
@@ -682,15 +692,34 @@ string PlanTitle(string text)
     return m.Success ? m.Groups[1].Value : "";
 }
 
-// Other plans in the specs folder with the same title: each one is an earlier try at the same goal.
-List<string> SameGoalPlans(string plan, string text, string specsFolder)
+// Title words that name the goal: "Caller-number fixes (after the stopped 006 build)" and
+// "Caller-number fixes, after the stopped 007 build" both become "caller number fixes".
+string[] GoalWords(string title)
+{
+    var t = Regex.Replace(title.ToLowerInvariant(), @"\(.*?\)", " ");
+    t = Regex.Replace(t, @",?\s+after\b.*$", "");
+    return Regex.Split(t, @"[^a-z0-9]+").Where(w => w != "" && !w.All(char.IsDigit)).ToArray();
+}
+
+// Same goal: the same words, or one title's words start the other's (at least two words), so follow-up suffixes still match.
+bool SameGoal(string a, string b)
+{
+    var (wa, wb) = (GoalWords(a), GoalWords(b));
+    var n = Math.Min(wa.Length, wb.Length);
+    return n > 0 && wa.Take(n).SequenceEqual(wb.Take(n)) && (n >= 2 || wa.Length == wb.Length);
+}
+
+// Other plans in the specs folder with the same goal: each one is an earlier try at it.
+// With "before", only plans whose file name sorts before it (the report uses this for builds recorded before v0.1.12).
+List<string> SameGoalPlans(string plan, string text, string specsFolder, bool onlyEarlier = false)
 {
     var title = PlanTitle(text);
     if (title == "" || !Directory.Exists(specsFolder)) return new List<string>();
     var self = Path.GetFullPath(plan);
     return Directory.GetFiles(specsFolder, "*.md")
         .Where(f => Path.GetFullPath(f) != self)
-        .Where(f => string.Equals(PlanTitle(File.ReadAllText(f)), title, StringComparison.OrdinalIgnoreCase))
+        .Where(f => !onlyEarlier || string.CompareOrdinal(Path.GetFileName(f), Path.GetFileName(plan)) < 0)
+        .Where(f => SameGoal(PlanTitle(File.ReadAllText(f)), title))
         .Select(f => Path.GetFileName(f)).OrderBy(f => f).ToList();
 }
 
