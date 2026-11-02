@@ -69,6 +69,10 @@ ExpectOutput "asks for an input/output table"  @('start', 'specs/002-gaps.md') '
 ExpectOutput "asks a task to own the end-to-end check" @('start', 'specs/002-gaps.md') 'No task owns the end-to-end check'
 Set-Content draft.md 'old notes, not part of the feature'
 Expect "start creates the branch (@path too)" (F start '@specs/001-cart.md') 0
+ExpectOutput "task prints its own task"     @('task', '1') 'Task 1: add button'
+$brief = & dotnet run .factory/factory.cs -- task 1 2>&1 | Out-String
+Expect "task leaves out the other tasks"     ($brief -match 'Task 2: show total') $false
+Expect "task keeps the glossary"             ($brief -match 'items picked, not paid') $true
 Expect "refuses commit before a pass"        (F commit 1) 1
 Expect "refuses check before a failing test" (F check 1) 1
 Expect "rejects tests that already pass"     (F red 1 --test "exit 0") 1
@@ -166,9 +170,16 @@ if ($onWindows) {
     Set-Content specs/005-follow.md "# Plan: follow`n$good`n### Task 1: fix`nTricky inputs: none (test)" -Encoding ascii
     git add -A; git commit -qm "follow-up plan"
     Expect "follow-up builds on the stopped branch" (F start specs/005-follow.md) 0
-    Set-Content specs/006-follow-again.md "# Plan: follow`n$good`n### Task 1: fix again`nTricky inputs: none (test)" -Encoding ascii
+    Set-Content specs/006-follow-again.md "# Plan: Follow, after the stopped 005 build`n$good`n### Task 1: fix again`nTricky inputs: none (test)" -Encoding ascii
     git add -A; git commit -qm "same goal again"
-    ExpectOutput "warns about a repeated title"  @('start', 'specs/006-follow-again.md') 'try 2 at the same goal'
+    ExpectOutput "warns about a repeated goal"   @('start', 'specs/006-follow-again.md') 'try 2 at the same goal'
+    # Builds recorded before v0.1.12 have no try number: report works it out from the plans in the specs folder.
+    F stop "test stop" | Out-Null; F finish | Out-Null
+    Set-Content specs/003-old.md "# Plan: Follow up fixes" -Encoding ascii
+    Set-Content specs/007-x.md "# Plan: Follow up fixes (after the stopped 006 build)" -Encoding ascii
+    $loop = Join-Path (git rev-parse --git-common-dir) 'factory/metrics.jsonl'
+    Add-Content $loop ('{"feature": "007-x", "date": "' + (Get-Date -Format 'yyyy-MM-dd') + '", "tasks": 1, "spec_to_pr_hours": 1}') -Encoding ascii
+    ExpectOutput "report counts older repeat tries" @('report', '--days', '30') 'repeat tries\s+1 of'
 }
 
 Pop-Location
