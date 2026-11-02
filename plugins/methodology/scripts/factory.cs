@@ -520,9 +520,9 @@ void Report(int days, bool html)
     var rows = File.ReadAllLines(metricsFile).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!)
         .Where(r => string.CompareOrdinal(Str(r, "date"), since) >= 0).ToList();
     if (rows.Count == 0) Die($"no features finished in the last {days} days.");
-    double Avg(string k) => rows.Where(r => r[k] != null).Select(r => r[k]!.GetValue<double>()).DefaultIfEmpty(0).Average();
-    double Sum(string k) => rows.Where(r => r[k] != null).Select(r => r[k]!.GetValue<double>()).Sum();
-    var medianHours = rows.Select(r => r["spec_to_pr_hours"]!.GetValue<double>()).OrderBy(x => x).ElementAt(rows.Count / 2);
+    double Avg(string k) => rows.Where(r => r[k] != null).Select(r => Num(r[k]!)).DefaultIfEmpty(0).Average();
+    double Sum(string k) => rows.Where(r => r[k] != null).Select(r => Num(r[k]!)).Sum();
+    var medianHours = rows.Select(r => Num(r["spec_to_pr_hours"]!)).OrderBy(x => x).ElementAt(rows.Count / 2);
     var config = LoadJson(ConfigPath, "Run /onboard first.");
     var escaped = EscapedBugs(config, since);
     var reverts = Git("log", $"--since={since}", "--grep=^Revert", "--oneline").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
@@ -596,8 +596,8 @@ List<(string Change, string Metric, double? Before, double? After, int Builds, s
     {
         var metric = Str(c, "metric");
         var causedAt = all.FindLastIndex(r => Str(r, "feature") == Str(c, "feature"));
-        var since = all.Skip(causedAt + 1).Where(r => r[metric] != null).Select(r => r[metric]!.GetValue<double>()).ToList();
-        var before = c["before"]?.GetValue<double>();
+        var since = all.Skip(causedAt + 1).Where(r => r[metric] != null).Select(r => Num(r[metric]!)).ToList();
+        var before = c["before"] is JsonNode b ? Num(b) : (double?)null;
         var after = since.Count > 0 ? since.Average() : (double?)null;
         var verdict = before == null || after == null ? "too early"
             : after == before ? "no change"
@@ -607,12 +607,15 @@ List<(string Change, string Metric, double? Before, double? After, int Builds, s
     return result;
 }
 
+// A JSON number as a double, whether it was read from a file or set in memory as an int (GetValue<double> throws on the latter).
+double Num(JsonNode n) => double.Parse(n.ToJsonString(), System.Globalization.CultureInfo.InvariantCulture);
+
 // One self-contained page: summary numbers, a bar chart per number across builds, every build, every retro change.
 string HtmlReport(int days, List<JsonNode> rows, List<(string Name, string Value)> lines,
     List<(string Change, string Metric, double? Before, double? After, int Builds, string Verdict)> changes)
 {
     string E(string t) => System.Net.WebUtility.HtmlEncode(t);
-    double? N(JsonNode r, string k) => r[k] == null ? null : r[k]!.GetValue<double>();
+    double? N(JsonNode r, string k) => r[k] == null ? null : Num(r[k]!);
     var h = new StringBuilder();
     h.AppendLine("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Build report</title><style>");
     h.AppendLine(":root{--bg:#f6f7f9;--card:#fff;--ink:#1b2230;--muted:#5a6476;--line:#dde2ea;--bar:#3d6fd8;--bad:#c2410c;--good:#15803d}");
@@ -670,7 +673,7 @@ string HtmlReport(int days, List<JsonNode> rows, List<(string Name, string Value
         h.Append($"<tr><td>{E(Str(r, "feature"))}</td>");
         foreach (var c in cols)
         {
-            var cell = r[c] == null ? "" : r[c]!.GetValueKind() == JsonValueKind.String ? Str(r, c) : c.EndsWith("_rate") ? $"{r[c]!.GetValue<double>():P0}" : c == "tokens_total" ? $"{r[c]!.GetValue<double>():N0}" : r[c]!.ToJsonString();
+            var cell = r[c] == null ? "" : r[c]!.GetValueKind() == JsonValueKind.String ? Str(r, c) : c.EndsWith("_rate") ? $"{Num(r[c]!):P0}" : c == "tokens_total" ? $"{Num(r[c]!):N0}" : r[c]!.ToJsonString();
             var css = c == "needs_you" && cell == "1" ? " class=\"bad\"" : c == "same_goal_tries" && N(r, c) > 1 ? " class=\"bad\"" : "";
             h.Append($"<td{css}>{E(cell)}</td>");
         }
@@ -789,7 +792,7 @@ void Decide(string? bucket, string? change, string? metric, string? place, strin
         var row = File.Exists(LoopMetricsPath)
             ? File.ReadAllLines(LoopMetricsPath).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!).LastOrDefault(r => Str(r, "feature") == target)
             : null;
-        var numeric = row?.AsObject().Where(kv => kv.Value is JsonValue v && v.TryGetValue<double>(out _)).Select(kv => kv.Key).ToList() ?? new List<string>();
+        var numeric = row?.AsObject().Where(kv => kv.Value is JsonValue v && v.GetValueKind() == JsonValueKind.Number).Select(kv => kv.Key).ToList() ?? new List<string>();
         if (metric == null || !numeric.Contains(metric))
             Die($"decide needs --metric, the number this change should move. One of: {string.Join(", ", numeric)}");
         line = $"{bucket}: {change} (moves {metric}, lives in {place ?? "plugin"})";
@@ -797,7 +800,7 @@ void Decide(string? bucket, string? change, string? metric, string? place, strin
         entry["change"] = change;
         entry["metric"] = metric;
         entry["where"] = place ?? "plugin";
-        entry["before"] = row![metric]!.GetValue<double>();
+        entry["before"] = Num(row![metric]!);
     }
     var text = File.ReadAllText(path);
     File.WriteAllText(path, Regex.Replace(text, @"^## Decision:.*$", $"## Decision: {line}", RegexOptions.Multiline));

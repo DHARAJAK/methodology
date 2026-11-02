@@ -180,6 +180,7 @@ if ($onWindows) {
     $loop = Join-Path (git rev-parse --git-common-dir) 'factory/metrics.jsonl'
     Add-Content $loop ('{"feature": "007-x", "date": "' + (Get-Date -Format 'yyyy-MM-dd') + '", "tasks": 1, "spec_to_pr_hours": 1}') -Encoding ascii
     ExpectOutput "report counts older repeat tries" @('report', '--days', '30') 'repeat tries\s+1 of'
+    ExpectOutput "report --html with older repeat tries" @('report', '--days', '30', '--html') 'Report page written'
 }
 
 Pop-Location
