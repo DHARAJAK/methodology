@@ -154,6 +154,14 @@ if ($onWindows) {
     F check 2 | Out-Null
     F review 2 --pass | Out-Null
     Expect "last task commits"                   (F commit 2) 0
+    # A new project on the branch: finish waits until CLAUDE.md (the next session's map of the repo) changes too.
+    New-Item -ItemType Directory tools/Live -Force | Out-Null
+    Set-Content tools/Live/Live.csproj '<Project />' -Encoding ascii
+    git add -- tools/Live/Live.csproj; git commit -qm "new project"
+    Expect "finish refuses when CLAUDE.md missed a new project" (F finish) 1
+    ExpectOutput "finish names the new project"  @('finish') 'new project file tools/Live/Live\.csproj'
+    Set-Content CLAUDE.md '# Project structure' -Encoding ascii
+    git add -- CLAUDE.md; git commit -qm "docs: CLAUDE.md structure"
     Expect "finish records metrics"              (F finish) 0
     Expect "finish commits the metrics line"     ((git status --porcelain -- .factory/metrics.jsonl) -eq $null) $true
     Expect "open-pr refuses an unfilled body"    (F open-pr --dry-run) 1
