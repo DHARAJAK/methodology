@@ -38,6 +38,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 const int MaxAttempts = 3; // first try + 2 reworks (ADR-004)
+const int MaxMechanical = 5; // failures that are only build, format or a locked file: not attempts, but capped
 const int MaxPlanWords = 2500; // above this, start warns: every subagent pays for the shared sections
 const string Factory = ".factory";
 string StatePath = Path.Combine(Factory, "state.json");
@@ -227,9 +228,9 @@ void Check(string taskId, string? testCmd)
     task["review"] = null;
 
     var attempts = task["attempts"]!.GetValue<int>() + 1;
-    task["attempts"] = attempts;
     task["started"] ??= Now();
     var config = LoadJson(ConfigPath, "Run /onboard first.");
+    FormatChangedFiles(config, state);
 
     var results = new List<(string Name, bool Ok, string Output)>();
     var newProblemLines = new List<string>();
@@ -264,6 +265,7 @@ void Check(string taskId, string? testCmd)
 
     if (passed)
     {
+        task["attempts"] = attempts;
         task["status"] = "passed";
         task["fingerprint"] = TreeFingerprint();
         Save(state);
@@ -272,6 +274,29 @@ void Check(string taskId, string? testCmd)
     }
     task["status"] = "failed";
     var failed = string.Join(", ", results.Where(r => !r.Ok).Select(r => r.Name));
+    // A failure that is only a compile error, a locked file or formatting says nothing about the task's logic:
+    // it does not use up one of the 3 attempts, but more than MaxMechanical of them stop the build.
+    // Lines already in the baseline are old problems, not this task's: leave them out of the decision.
+    var known = File.Exists(BaselinePath) ? ProblemLines(File.ReadAllText(BaselinePath)) : new HashSet<string>();
+    var mechanical = MechanicalFailure(string.Join("\n", results.Where(r => !r.Ok)
+        .SelectMany(r => r.Output.Split('\n')).Where(l => !known.Contains(Regex.Replace(l.Trim(), @"\d+", "N")))));
+    if (mechanical != null)
+    {
+        var count = (task["mechanical_failures"]?.GetValue<int>() ?? 0) + 1;
+        task["mechanical_failures"] = count;
+        Append(task, "check_log", new JsonObject
+        {
+            ["attempt"] = attempts - 1,
+            ["failed"] = $"{failed} ({mechanical}, not counted)",
+            ["problems"] = new JsonArray(newProblemLines.Take(5).Select(l => (JsonNode?)JsonValue.Create(l)).ToArray()),
+        });
+        if (count >= MaxMechanical) Stop(state, $"task {taskId} failed {count} times on build, format or a locked file (not counted as attempts). See {LastCheckPath}.");
+        Save(state);
+        Console.WriteLine($"FAIL: task {taskId}, {mechanical} only. Not counted as an attempt ({count} of {MaxMechanical} such failures).");
+        Console.WriteLine($"Details in {LastCheckPath}. Fix the problem and run the check again.");
+        Environment.Exit(1);
+    }
+    task["attempts"] = attempts;
     // Evidence for the retro: what failed on which attempt (the first few new problem lines, not the whole log).
     Append(task, "check_log", new JsonObject
     {
@@ -436,6 +461,7 @@ void Finish()
         ["done_when_coverage"] = Ratio(committed.Count(t => t["has_test"]?.GetValue<bool>() == true), committed.Count),
         ["test_first_rate"] = Ratio(committed.Count(t => t["red"]?["test"] != null), committed.Count),
         ["review_findings"] = tasks.Sum(t => t["review_findings"]?.GetValue<int>() ?? 0),
+        ["mechanical_failures"] = tasks.Sum(t => t["mechanical_failures"]?.GetValue<int>() ?? 0),
         ["secrets_caught"] = state["secrets_caught"]?.GetValue<int>() ?? 0,
         ["unapproved_deps"] = unapproved.Count,
         ["tokens_total"] = tokensTotal,
@@ -1159,6 +1185,37 @@ string Git(params string[] gitArgs)
     if (code != 0 && gitArgs[0] is not ("diff" or "ls-files"))
         Die($"git {string.Join(' ', gitArgs)} failed: {output.Trim()}");
     return output.Trim();
+}
+
+// Fixes spacing and line endings of the .cs files this task changed, so a CRLF file never fails a check.
+// Off with "format": false in .factory/config.json. Only whitespace: it never changes what the code does.
+void FormatChangedFiles(JsonNode config, JsonNode state)
+{
+    if (config["format"] is JsonValue v && v.GetValueKind() == JsonValueKind.False) return;
+    var leftOut = (state["left_out"]?.AsArray() ?? new JsonArray()).Select(n => n!.GetValue<string>()).ToHashSet();
+    var files = Git("diff", "--name-only", "HEAD").Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Concat(Git("ls-files", "--others", "--exclude-standard").Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        .Select(f => f.Trim()).Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && File.Exists(f) && !leftOut.Contains(f))
+        .Distinct().ToList();
+    if (files.Count == 0) return;
+    try
+    {
+        var (code, _) = Run("dotnet", new[] { "format", "whitespace", "--folder", "--include" }.Concat(files));
+        Console.WriteLine(code == 0
+            ? $"Formatted {files.Count} changed .cs file(s) (spacing and line endings) before the check."
+            : "Note: formatting the changed files failed; the check runs anyway.");
+    }
+    catch (System.ComponentModel.Win32Exception) { } // no dotnet on this machine: nothing to format with
+}
+
+// Names the kind of failure when it is only mechanical (no test failed), otherwise null.
+string? MechanicalFailure(string output)
+{
+    if (Regex.IsMatch(output, @"Failed!\s+-\s+Failed:|\[FAIL\]|^\s*Failed\s+\S+\s+\[", RegexOptions.Multiline)) return null;
+    if (Regex.IsMatch(output, @"being used by another process|\bMSB302[1-7]\b", RegexOptions.IgnoreCase)) return "locked file";
+    if (Regex.IsMatch(output, @"\berror (CS|MSB|NETSDK)\d{4}\b")) return "build";
+    if (Regex.IsMatch(output, @"\berror (WHITESPACE|ENDOFLINE|FINALNEWLINE|CHARSET|IDE0055)\b")) return "format";
+    return null;
 }
 
 (int, string) Shell(string command)

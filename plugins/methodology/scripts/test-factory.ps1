@@ -107,6 +107,37 @@ Set-Content .factory/config.json '{"check": "no-such-check-command"}' -Encoding 
 F red 1 --test "exit 1" | Out-Null
 Expect "a check that cannot run fails"       (F check 1) 1
 
+# Before each check the changed .cs files get their spacing and line endings fixed, so a CRLF file cannot fail it.
+Set-Content .editorconfig "root = true`n[*.cs]`nend_of_line = lf" -Encoding ascii
+[IO.File]::WriteAllText((Join-Path $PWD 'Foo.cs'), "class Foo`r`n{`r`n}`r`n")
+# A failure that is only a build error, formatting or a locked file is not one of the 3 attempts; 5 of them stop.
+Set-Content msg.txt 'Foo.cs(1,1): error ENDOFLINE: Fix end of line marker' -Encoding ascii
+if ($onWindows) {
+    Set-Content mech.cmd "@echo off`r`ntype msg.txt`r`nexit /b 1" -Encoding ascii
+    Set-Content .factory/config.json '{"check": ".\\mech.cmd"}' -Encoding ascii
+} else {
+    Set-Content mech.sh "cat msg.txt`nexit 1" -Encoding ascii
+    Set-Content .factory/config.json '{"check": "sh mech.sh"}' -Encoding ascii
+}
+ExpectOutput "a format failure is not an attempt" @('check', '1') 'format only\. Not counted as an attempt \(1 of 5'
+Expect "changed .cs files get LF line endings" ([IO.File]::ReadAllText((Join-Path $PWD 'Foo.cs')).Contains("`r")) $false
+Set-Content msg.txt 'App.cs(3,1): error CS1002: ; expected' -Encoding ascii
+ExpectOutput "a build error is not an attempt" @('check', '1') 'build only\. Not counted as an attempt \(2 of 5'
+Expect "attempts unchanged by them"          ((Get-Content .factory/state.json -Raw | ConvertFrom-Json).tasks[0].attempts) 1
+Set-Content msg.txt "App.cs(3,1): error CS1002: ; expected`nFailed!  - Failed:     1, Passed:     4" -Encoding ascii
+Expect "a failing test still counts"         (F check 1) 1
+Expect "attempt counted for the failing test" ((Get-Content .factory/state.json -Raw | ConvertFrom-Json).tasks[0].attempts) 2
+Set-Content msg.txt 'App.cs(3,1): error CS1002: ; expected' -Encoding ascii
+F check 1 | Out-Null; F check 1 | Out-Null
+Expect "STOP after 5 build-only failures"    (F check 1) 2
+Remove-Item .editorconfig, Foo.cs, msg.txt, mech.*
+git checkout -q -- .factory/config.json
+git switch -q main
+git branch -q -D feat/001-cart
+Remove-Item .factory/state.json
+F start specs/001-cart.md | Out-Null
+F red 1 --test "exit 1" | Out-Null
+
 if ($onWindows) {
     # Prints only a baseline error, so this passes only if the script really ran (a script that cannot start now fails).
     Set-Content check.ps1 "Write-Output 'old: error in legacy.cs line 99'`r`nexit 1" -Encoding ascii

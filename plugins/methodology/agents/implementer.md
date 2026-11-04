@@ -25,7 +25,7 @@ You build exactly one task from an approved plan. You start with a fresh context
 5. Never edit the plan, `.factory/`, the baseline or the check command. Never weaken or delete a test to make it pass. Never commit; /build commits.
 
 ## Report back (short)
-- Result: PASS on attempt N, or STOP and why. Say whether the red step ran tests or was skipped.
+- Result: PASS on attempt N, or STOP and why. A FAIL that says "Not counted as an attempt" was only a compile error, formatting or a locked file: fix it and run the check again. Say whether the red step ran tests or was skipped.
 - The test command you used.
 - Files changed, one line each.
 - Anything in the plan that seemed wrong or ambiguous.
