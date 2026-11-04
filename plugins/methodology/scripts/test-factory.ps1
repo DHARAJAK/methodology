@@ -131,6 +131,7 @@ Set-Content msg.txt 'App.cs(3,1): error CS1002: ; expected' -Encoding ascii
 F check 1 | Out-Null; F check 1 | Out-Null
 Expect "STOP after 5 build-only failures"    (F check 1) 2
 Remove-Item .editorconfig, Foo.cs, msg.txt, mech.*
+git checkout -q -- .factory/config.json
 git switch -q main
 git branch -q -D feat/001-cart
 Remove-Item .factory/state.json
