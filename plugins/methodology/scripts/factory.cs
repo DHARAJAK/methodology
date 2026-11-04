@@ -407,12 +407,6 @@ void Finish()
     var planText = File.Exists(plan) ? File.ReadAllText(plan) : "";
     var config = LoadJson(ConfigPath, "Run /onboard first.");
 
-    // Final full check: new problems and complexity warnings compared to the baseline.
-    var (code, output) = Shell(Str(config, "check"));
-    var baseline = File.Exists(BaselinePath) ? ProblemLines(File.ReadAllText(BaselinePath)) : new HashSet<string>();
-    var newProblems = code == 0 ? 0 : ProblemLines(output).Except(baseline).Count();
-    var complexity = Regex.Matches(output, @"CA1502|CA1505|S3776|S1541|cyclomatic|cognitive complexity", RegexOptions.IgnoreCase).Count;
-
     // Dependencies added on this branch that the plan does not name.
     var depDiff = Git("diff", $"{BaseOf(config, state)}...HEAD", "--", "*.csproj", "package.json", "Directory.Packages.props");
     var added = Regex.Matches(depDiff, @"^\+.*(?:PackageReference|PackageVersion)\s+(?:Include|Update)=""([^""]+)""", RegexOptions.Multiline).Select(m => m.Groups[1].Value)
@@ -431,6 +425,24 @@ void Finish()
         .Where(f => !f.StartsWith(".factory/") && !f.StartsWith(specsFolder + "/")).ToList();
     var docsWarning = changed.Any(f => !f.EndsWith(".md")) && !changed.Any(f => f.EndsWith(".md"))
         ? "Code changed but no docs did: is CLAUDE.md (and any README or roadmap) still right?" : null;
+
+    // Structure check: a new project, solution, top-level folder or package means the next session's map of the repo
+    // (CLAUDE.md or .claude/rules) must change too, or every later agent starts from an out-of-date picture.
+    if (status == "tasks-done" && config["claude_md_check"]?.GetValue<bool>() != false)
+    {
+        var structure = StructureChanges(baseRef, specsFolder, added);
+        var mapUpdated = changed.Any(f => f == "CLAUDE.md" || f.EndsWith("/CLAUDE.md") || f.StartsWith(".claude/rules/"));
+        if (structure.Count > 0 && !mapUpdated)
+            Die("The project structure changed but CLAUDE.md did not:\n  " + string.Join("\n  ", structure) +
+                "\nAdd these to the project structure part of CLAUDE.md (or a file in .claude/rules/), commit it with " +
+                "`git commit -m \"docs: CLAUDE.md structure\"`, then run finish again.");
+    }
+
+    // Final full check (after the structure check, so a refusal comes before the slow part): new problems and complexity warnings compared to the baseline.
+    var (code, output) = Shell(Str(config, "check"));
+    var baseline = File.Exists(BaselinePath) ? ProblemLines(File.ReadAllText(BaselinePath)) : new HashSet<string>();
+    var newProblems = code == 0 ? 0 : ProblemLines(output).Except(baseline).Count();
+    var complexity = Regex.Matches(output, @"CA1502|CA1505|S3776|S1541|cyclomatic|cognitive complexity", RegexOptions.IgnoreCase).Count;
 
     var planCommits = Git("log", "--format=%cI", "--", plan).Split('\n', StringSplitOptions.RemoveEmptyEntries);
     var specStart = planCommits.Length > 0 ? DateTimeOffset.Parse(planCommits[^1]) : DateTimeOffset.Parse(Str(state, "started"));
@@ -878,6 +890,23 @@ string HostOf(JsonNode config)
 }
 
 // The branch PRs/MRs target: "base" in config, else the branch the feature started from, else main.
+// What changed in the shape of the repo on this branch: new projects or solutions, new top-level folders, new packages.
+List<string> StructureChanges(string baseRef, string specsFolder, List<string> addedDeps)
+{
+    var list = new List<string>();
+    var newFiles = Git("diff", "--name-only", "--diff-filter=A", $"{baseRef}...HEAD").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+    foreach (var f in newFiles.Where(f => Regex.IsMatch(f, @"\.(csproj|fsproj|vbproj|sln|slnx)$|(^|/)package\.json$")))
+        list.Add($"new project file {f}");
+    var baseTop = Git("ls-tree", "--name-only", baseRef).Split('\n', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+    var specsTop = specsFolder.Split('/')[0];
+    foreach (var top in newFiles.Where(f => f.Contains('/')).Select(f => f.Split('/')[0]).Distinct()
+        .Where(t => !t.StartsWith(".") && t != specsTop && !baseTop.Contains(t)))
+        list.Add($"new folder {top}/");
+    foreach (var dep in addedDeps.Where(dep => Run("git", new[] { "grep", "-q", "-F", dep, baseRef, "--", "*.csproj", "package.json", "Directory.Packages.props" }).Item1 != 0))
+        list.Add($"new package {dep}");
+    return list;
+}
+
 string BaseOf(JsonNode config, JsonNode state) =>
     Str(config, "base") is { Length: > 0 } fromConfig ? fromConfig
     : Str(state, "base") is { Length: > 0 } fromState ? fromState

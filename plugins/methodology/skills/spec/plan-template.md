@@ -70,7 +70,7 @@ Spec number: <NNN>
 - [ ] Every task has a `Scenario: Tricky:` for its most awkward input, or `Tricky inputs: none (reason)`.
 - [ ] Every file the plan mentions exists, is in a task's Files line, or is marked (new).
 - [ ] Differences from existing behaviour are listed (or "none").
-- [ ] If behaviour changes, a task updates `CLAUDE.md` and the docs that describe it.
+- [ ] If behaviour or structure changes (a new project, folder or package), a task updates `CLAUDE.md` and the docs that describe it. `factory finish` refuses a new project, folder or package that CLAUDE.md doesn't mention.
 - [ ] There is one end-to-end check, and a task owns it (`Scenario: End-to-end:`).
 - [ ] Every task that parses, masks or validates text has an input → output table of at least 5 exact rows, from the adversarial pass.
 - [ ] Optional: the customer has read the scenarios.

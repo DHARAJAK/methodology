@@ -39,7 +39,7 @@ When `factory commit` says "All tasks done":
 4. If the review found a real correctness problem or a requirement gap: run `factory stop "<one-line reason>"`, then go to step 5 (Needs you) with the findings. Do not fix it in this run.
 
 ## 4. Pull request (Done)
-1. Run `factory finish`. It records the 13 metrics in `.factory/metrics.jsonl` and writes `.factory/pr-body.md`.
+1. Run `factory finish`. It records the 13 metrics in `.factory/metrics.jsonl` and writes `.factory/pr-body.md`. If it refuses because the project structure changed but `CLAUDE.md` did not, add each thing it names (new project, folder or package, one line on what it is for) to the project structure part of `CLAUDE.md`, commit with `git commit -m "docs: CLAUDE.md structure"`, and run `factory finish` again.
 2. Replace "<filled in by /build>" in `.factory/pr-body.md` with: the review result, the ADR gaps found, and the end-to-end check for `/verify`.
 3. Push the branch: `git push -u origin feat/<plan>` (allowed by the onboarded settings, so no prompt; pushing to the base branch stays denied).
 4. Open the pull request (GitHub) or merge request (GitLab): `factory open-pr`. The referee picks the host from the origin URL (or `host` in `.factory/config.json`) and targets the `base` branch. If it says the CLI is missing or not signed in, tell the user the exact command it printed (`glab auth login` or `gh auth login`) and stop; the branch is already pushed.
