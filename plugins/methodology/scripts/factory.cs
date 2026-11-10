@@ -12,6 +12,7 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- commit 1 -m "add-to-cart button"
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- status
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- task   1   (only what task 1 needs from the plan: saves tokens per subagent)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- route  1   (model and effort for task 1's next implementer, from its size)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- stop "reason" (Code Evaluation failed: hand back to you)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- finish        (end of feature: metrics + PR body)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- open-pr [--dry-run] (GitHub PR or GitLab MR into the base branch)
@@ -60,7 +61,7 @@ const int MinInputRows = 5;
 string LoopMetricsPath = Path.Combine(LoopDir, "metrics.jsonl");
 string ImprovementsPath = Path.Combine(LoopDir, "improvements.jsonl");
 // Metrics where higher is better; for every other number lower is better.
-string[] HigherIsBetter = { "first_pass_rate", "done_when_coverage", "test_first_rate" };
+string[] HigherIsBetter = { "first_pass_rate", "done_when_coverage", "test_first_rate", "first_pass_rate_sonnet", "first_pass_rate_opus" };
 string[] Buckets = { "spec-gap", "harness-gap", "rule-gap", "model-slip" };
 
 if (args.Length == 0) Usage();
@@ -73,6 +74,7 @@ switch (args[0])
     case "commit": if (args.Length < 2) Usage(); Commit(args[1], Option("-m")); break;
     case "status": Status(); break;
     case "task": if (args.Length < 2) Usage(); TaskBrief(args[1]); break;
+    case "route": if (args.Length < 2) Usage(); RouteCommand(args[1]); break;
     case "finish": Finish(); break;
     case "open-pr": OpenPr(args.Contains("--dry-run")); break;
     case "note": if (args.Length < 2) Usage(); Note(NoteText()); break;
@@ -474,6 +476,10 @@ void Finish()
         ["test_first_rate"] = Ratio(committed.Count(t => t["red"]?["test"] != null), committed.Count),
         ["review_findings"] = tasks.Sum(t => t["review_findings"]?.GetValue<int>() ?? 0),
         ["mechanical_failures"] = tasks.Sum(t => t["mechanical_failures"]?.GetValue<int>() ?? 0),
+        ["attempts_sonnet"] = tried.Sum(t => AttemptsOn(t, "sonnet")),
+        ["attempts_opus"] = tried.Sum(t => AttemptsOn(t, "opus")),
+        ["first_pass_rate_sonnet"] = FirstPassOn(tried, "sonnet"),
+        ["first_pass_rate_opus"] = FirstPassOn(tried, "opus"),
         ["secrets_caught"] = state["secrets_caught"]?.GetValue<int>() ?? 0,
         ["unapproved_deps"] = unapproved.Count,
         ["tokens_total"] = tokensTotal,
@@ -608,6 +614,11 @@ void Report(int days, bool html)
         ("unapproved deps", $"{Sum("unapproved_deps")}"),
         ("tokens per feature", $"{Avg("tokens_total"):N0} (output {Avg("tokens_output"):N0})"),
     };
+    if (rows.Any(r => r["attempts_sonnet"] != null))
+            {
+        string Rate(string k) => rows.Any(r => r[k] != null) ? $"{Avg(k):P0}" : "n/a";
+        lines.Add(("by model", $"Sonnet: {Sum("attempts_sonnet")} attempts, first pass {Rate("first_pass_rate_sonnet")} · Opus: {Sum("attempts_opus")} attempts, first pass {Rate("first_pass_rate_opus")}"));
+    }
     var changes = Improvements(metricsFile);
 
     Console.WriteLine($"Last {days} days · {rows.Count} features · {Sum("tasks")} tasks");
@@ -882,6 +893,66 @@ void TaskBrief(string taskId)
     Console.WriteLine(sb.ToString().TrimEnd());
 }
 
+// Model routing: the plan's own task text decides how hard the task is, so the choice is the same every run.
+// Levels: 0 small (Sonnet, medium effort), 1 medium (Sonnet, high), 2 large (Opus, high), 3 (Opus, xhigh).
+// Each real failed attempt moves the next implementer one level up. "models": {"implementer": ...} in
+// .factory/config.json fixes the model; "model_routing": false turns sizing off (Sonnet, no effort set).
+(string Model, string? Effort, string Why) Route(JsonNode config, JsonNode task, string taskText)
+{
+    var fixedModel = config["models"]?["implementer"]?.GetValue<string>();
+    if (config["model_routing"] is JsonValue off && off.GetValueKind() == JsonValueKind.False)
+        return (fixedModel ?? "sonnet", null, "model routing is off");
+    var files = Regex.Match(taskText, @"\*\*Files:\*\*(.*)").Groups[1].Value;
+    var paths = Regex.Matches(files, @"`([^`]+)`").Select(m => m.Groups[1].Value.Replace('\\', '/')).ToList();
+    // Projects touched, test projects left out (almost every task touches one).
+    var projects = paths.Where(p => !Regex.IsMatch(p, @"test", RegexOptions.IgnoreCase))
+        .Select(p => string.Join('/', p.Split('/').Take(Math.Max(1, p.Split('/').Length - 1)).Take(2))).Distinct().Count();
+    var tricky = Regex.Matches(taskText, @"Scenario:\s*Tricky", RegexOptions.IgnoreCase).Count;
+    var table = Regex.IsMatch(taskText, @"\|\s*Input\s*\|\s*Output\s*\|", RegexOptions.IgnoreCase);
+    var hard = Regex.Matches(taskText, @"\b(thread\w*|lock\w*|async|await|concurren\w*|race|deadlock|dispos\w*|cancel\w*|timer\w*|SIP|RTP|audio|NAudio|socket\w*|codec\w*)\b", RegexOptions.IgnoreCase)
+        .Select(m => m.Value.ToLowerInvariant()).Distinct().ToList();
+    var why = new List<string>();
+    var level = 0;
+    if (hard.Count > 0) { level = 2; why.Add(string.Join(", ", hard.Take(3))); }
+    if (projects > 1) { level = 2; why.Add($"{projects} projects"); }
+    if (level < 2 && (paths.Count >= 3 || table || tricky >= 2))
+    {
+        level = 1;
+        if (paths.Count >= 3) why.Add($"{paths.Count} files");
+        if (table) why.Add("input/output table");
+        if (tricky >= 2) why.Add($"{tricky} tricky scenarios");
+    }
+    var size = new[] { "small", "medium", "large" }[level];
+    var failed = task["attempts"]!.GetValue<int>();
+    if (failed > 0) { level = Math.Min(3, level + failed); why.Add($"after {failed} failed attempt(s)"); }
+    var (model, effort) = level switch { 0 => ("sonnet", "medium"), 1 => ("sonnet", "high"), 2 => ("opus", "high"), _ => ("opus", "xhigh") };
+    if (fixedModel != null) { model = fixedModel; why.Add("model fixed in .factory/config.json"); }
+    return (model, effort, $"{size} task{(why.Count > 0 ? ": " + string.Join(", ", why) : "")}");
+}
+
+string TaskText(JsonNode state, string taskId)
+{
+    var text = File.ReadAllText(Str(state, "plan"));
+    return Regex.Match(text, $@"^###\s*Task\s+{Regex.Escape(taskId)}\s*:.*?(?=^###?\s|\z)", RegexOptions.Multiline | RegexOptions.Singleline).Value;
+}
+
+// Prints the model and effort for the task's next implementer and records it, so finish can count attempts per model.
+void RouteCommand(string taskId)
+{
+    var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
+    var config = LoadJson(ConfigPath, "Run /onboard first.");
+    var task = FindTask(state, taskId);
+    var (model, effort, why) = Route(config, task, TaskText(state, taskId));
+    var attempt = task["attempts"]!.GetValue<int>() + 1;
+    var routes = task["routes"] as JsonObject ?? new JsonObject();
+    routes[attempt.ToString()] = model;
+    task["routes"] = routes;
+    Save(state);
+    Console.WriteLine($"model: {model}");
+    if (effort != null) Console.WriteLine($"effort: {effort}");
+    Console.WriteLine($"why: {why} (attempt {attempt})");
+}
+
 void Status()
 {
     var state = LoadJson(StatePath, "No build in progress.");
@@ -1150,7 +1221,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | task <task> | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [--days N] [--html]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | task <task> | route <task> | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [--days N] [--html]");
     Environment.Exit(1);
 }
 
@@ -1228,6 +1299,18 @@ string Git(params string[] gitArgs)
     if (code != 0 && gitArgs[0] is not ("diff" or "ls-files"))
         Die($"git {string.Join(' ', gitArgs)} failed: {output.Trim()}");
     return output.Trim();
+}
+
+// Attempts of a task that ran on a model (from "factory route"); tasks routed before v0.1.18 count nowhere.
+int AttemptsOn(JsonNode task, string model) =>
+    (task["routes"] as JsonObject)?.Count(r => int.Parse(r.Key) <= task["attempts"]!.GetValue<int>()
+        && (r.Value?.GetValue<string>() ?? "").Contains(model, StringComparison.OrdinalIgnoreCase)) ?? 0;
+
+// First-pass rate of the tasks whose first attempt ran on a model; null when none did.
+JsonNode? FirstPassOn(List<JsonNode> tried, string model)
+{
+    var started = tried.Where(t => ((t["routes"] as JsonObject)?["1"]?.GetValue<string>() ?? "").Contains(model, StringComparison.OrdinalIgnoreCase)).ToList();
+    return started.Count == 0 ? null : JsonValue.Create(Ratio(started.Count(t => Str(t, "status") == "committed" && t["attempts"]!.GetValue<int>() == 1), started.Count));
 }
 
 // Stashes the files a stopped build changed but never committed (not .factory/, not files left out at start).
