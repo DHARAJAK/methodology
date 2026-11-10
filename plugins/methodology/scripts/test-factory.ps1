@@ -73,6 +73,7 @@ ExpectOutput "task prints its own task"     @('task', '1') 'Task 1: add button'
 $brief = & dotnet run .factory/factory.cs -- task 1 2>&1 | Out-String
 Expect "task leaves out the other tasks"     ($brief -match 'Task 2: show total') $false
 Expect "task keeps the glossary"             ($brief -match 'items picked, not paid') $true
+ExpectOutput "route sends a small task to Sonnet" @('route', '1') 'model: sonnet\s+effort: medium'
 Expect "refuses commit before a pass"        (F commit 1) 1
 Expect "refuses check before a failing test" (F check 1) 1
 Expect "rejects tests that already pass"     (F red 1 --test "exit 0") 1
@@ -87,6 +88,7 @@ Expect "old untracked files stay out of commits" ((git show --name-only --format
 New-Item BAD -ItemType File | Out-Null
 Expect "red can be skipped with a reason"    (F red 2 --skip "no behaviour to test") 0
 Expect "new error fails (attempt 1)"         (F check 2) 1
+ExpectOutput "a failed attempt moves the next one up" @('route', '2') 'effort: high'
 Expect "new error fails (attempt 2)"         (F check 2) 1
 Expect "STOP after 3 failures"               (F check 2) 2
 
