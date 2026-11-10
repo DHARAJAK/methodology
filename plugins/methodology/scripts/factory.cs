@@ -1237,7 +1237,8 @@ string? StashLeftovers(JsonNode state)
     var leftOut = (state["left_out"]?.AsArray() ?? new JsonArray()).Select(n => n!.GetValue<string>()).ToHashSet();
     var files = Git("diff", "--name-only", "HEAD").Split('\n', StringSplitOptions.RemoveEmptyEntries)
         .Concat(Git("ls-files", "--others", "--exclude-standard").Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        .Select(f => f.Trim()).Where(f => f != "" && !f.StartsWith(".factory/") && !leftOut.Contains(f))
+        // Git's stderr is mixed into this output: drop its warnings (for example "LF will be replaced by CRLF").
+        .Select(f => f.Trim()).Where(f => f != "" && !f.StartsWith("warning:") && !f.StartsWith(".factory/") && !leftOut.Contains(f))
         .Distinct().ToList();
     if (files.Count == 0) return null;
     var tasks = state["tasks"]!.AsArray().Select(t => t!).ToList();
@@ -1245,7 +1246,7 @@ string? StashLeftovers(JsonNode state)
         ?? tasks.FirstOrDefault(t => Str(t, "status") != "committed");
     var msg = task == null
         ? $"{Str(state, "feature")} unfinished work"
-        : $"{Str(state, "feature")} task {Str(task, "id")} attempt {task["attempts"]}";
+        : $"{Str(state, "feature")} task {Str(task, "id")}" + (task["attempts"]!.GetValue<int>() > 0 ? $" attempt {task["attempts"]}" : "");
     var (code, output) = Run("git", new[] { "stash", "push", "--include-untracked", "-m", msg, "--" }.Concat(files));
     if (code != 0)
     {
