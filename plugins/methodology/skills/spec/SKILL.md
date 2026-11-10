@@ -17,7 +17,7 @@ If the idea is a tiny change, a single bug, or a medium change with an obvious a
 ## 1. Idea
 - Restate the idea in 2-3 lines and ask the user to confirm.
 - Use the Explore subagent to read the relevant code, `CLAUDE.md` and `<adrs>/`, so your questions are informed and the plan respects existing decisions.
-- If this follows up a stopped build, read its retro (`git rev-parse --git-common-dir`, then `factory/retros/<feature>.md`): the Evidence and "Notes for the next spec" sections are your brief. Every finding there needs a task or a line in Out of scope.
+- If this follows up a stopped build, read its retro (`git rev-parse --git-common-dir`, then `factory/retros/<feature>.md`): the Evidence and "Notes for the next spec" sections are your brief. Every finding there needs a task or a line in Out of scope. If the notes name a git stash with the unfinished attempt, ask the user whether to build on it or start fresh. To build on it, tell them to run `git stash apply` for it and commit it (`git commit -m "wip: <feature> task N"`) before `/build`, and write the tasks to finish that code.
 
 ## 2. Interview (about 10 questions max)
 - Ask ONE question at a time. Offer 2-4 likely answers plus "other" when you can.
