@@ -199,7 +199,8 @@ if ($onWindows) {
     ExpectOutput "a note before finish waits for this build" @('note', 'noted before finish') 'Noted for the 004-next retro'
     F finish | Out-Null
     Expect "finish stashes the unfinished work"   ([bool]((git stash list) -match '004-next task')) $true
-    Expect "the stash leaves the folder clean"    ([string]::IsNullOrEmpty(((git status --porcelain --untracked-files=no) -join '') + $(if (Test-Path Leftover.cs) { 'x' }))) $true
+    Expect "the changed file is back to committed" ((git status --porcelain -- notes.md) -eq $null) $true
+    Expect "the new file went into the stash"     (Test-Path Leftover.cs) $false
     Expect "the retro names the stash"            ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/retros/004-next.md') -Raw) -match 'git stash') $true
     $retros = Join-Path (git rev-parse --git-common-dir) 'factory/retros'
     Expect "early note lands in this build's retro" ((Get-Content (Join-Path $retros '004-next.md') -Raw) -match 'noted before finish') $true
