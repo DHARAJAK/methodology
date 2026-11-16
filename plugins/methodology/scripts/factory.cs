@@ -1451,6 +1451,11 @@ string? MechanicalFailure(string output)
 
 (int, string) Shell(string command)
 {
+    // A dotnet command runs without a shell, so a '|' in "dotnet test --filter A|B" reaches dotnet
+    // instead of being read as a pipe by cmd.exe or sh (it stopped builds 035, 053 and 055).
+    var direct = DirectDotnet(command);
+    if (direct != null) return Run(direct[0], direct.Skip(1));
+
     if (!OperatingSystem.IsWindows()) return Run("/bin/sh", new[] { "-c", command });
 
     // cmd.exe cannot run a PowerShell script such as "./scripts/verify.ps1", so run .ps1 checks with PowerShell.
@@ -1460,6 +1465,33 @@ string? MechanicalFailure(string output)
     var psArgs = new List<string> { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script.Groups["path"].Value };
     psArgs.AddRange(script.Groups["rest"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
     return Run("powershell.exe", psArgs);
+}
+
+// Splits a command that starts with dotnet into its arguments, honouring double quotes, or returns
+// null when it needs a shell: another program first, or &, ;, < or > outside quotes.
+List<string>? DirectDotnet(string command)
+{
+    var parts = new List<string>();
+    var current = new StringBuilder();
+    bool quoted = false, inToken = false;
+    foreach (var c in command)
+    {
+        if (c == '"') { quoted = !quoted; inToken = true; continue; }
+        if (!quoted && "&;<>".Contains(c)) return null;
+        if (!quoted && char.IsWhiteSpace(c))
+        {
+            if (inToken) { parts.Add(current.ToString()); current.Clear(); inToken = false; }
+            continue;
+        }
+        current.Append(c);
+        inToken = true;
+    }
+    if (quoted) return null;
+    if (inToken) parts.Add(current.ToString());
+    if (parts.Count == 0) return null;
+    var program = parts[0];
+    return program.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+        || program.Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase) ? parts : null;
 }
 
 (int, string) Run(string file, IEnumerable<string> argList, Dictionary<string, string>? env = null)

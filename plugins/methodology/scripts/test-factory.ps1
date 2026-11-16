@@ -77,6 +77,12 @@ ExpectOutput "route sends a small task to Sonnet" @('route', '1') 'model: sonnet
 Expect "refuses commit before a pass"        (F commit 1) 1
 Expect "refuses check before a failing test" (F check 1) 1
 Expect "rejects tests that already pass"     (F red 1 --test "exit 0") 1
+# A '|' in a dotnet test filter must reach dotnet, not act as a pipe (stopped builds 035, 053, 055).
+# The probe exits 0 only when it gets the two arguments intact, so red must reject it as already passing.
+New-Item -ItemType Directory probe | Out-Null
+Set-Content probe/argcheck.cs 'return args.Length == 2 && args[0] == "--filter" && args[1] == "A|B" ? 0 : 1;' -Encoding ascii
+Expect "a | in a dotnet --test filter is not a pipe" (F red 1 --test "dotnet run probe/argcheck.cs -- --filter A|B") 1
+Remove-Item -Recurse -Force probe
 Expect "records a failing test (red)"        (F red 1 --test "exit 1") 0
 Set-Content a.txt 'x'
 Expect "ignores errors already in baseline"  (F check 1) 0
