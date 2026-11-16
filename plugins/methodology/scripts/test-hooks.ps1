@@ -44,6 +44,7 @@ Expect "--no-verify is always blocked"         (Hook no-raw-commit (Shell 'git c
 Expect "-n is always blocked"                  (Hook no-raw-commit (Shell 'git commit -n -m x')) 2
 Expect "outside a build: hooksPath setup is ok" (Hook no-raw-commit (Shell 'git config core.hooksPath .githooks')) 0
 Expect "outside a build: plan can be edited"   (Hook lock-specs (Edit "$dir/specs/001-cart.md")) 0
+Expect "outside a build: .claude can be edited" (Hook lock-specs (Edit "$dir/.claude/rules/desktop.md")) 0
 Expect "unreadable input: guard fails closed"  (Hook no-raw-commit 'not json') 2
 Expect "unreadable input: stop stays open"     (Hook stop 'not json') 0
 
@@ -56,6 +57,9 @@ Expect "build: git status is allowed"          (Hook no-raw-commit (Shell 'git s
 Expect "build: plan is locked"                 (Hook lock-specs (Edit "$dir/specs/001-cart.md")) 2
 Expect "build: .factory is locked"             (Hook lock-specs (Edit "$dir/.factory/state.json")) 2
 Expect "build: source files can be edited"     (Hook lock-specs (Edit "$dir/src/App.cs")) 0
+Expect "build: .claude rules are locked"       (Hook lock-specs (Edit "$dir/.claude/rules/desktop.md")) 2
+Expect "build: .claude settings are locked"    (Hook lock-specs (Edit "$dir/.claude/settings.json")) 2
+Expect "build: CLAUDE.md can still be edited"  (Hook lock-specs (Edit "$dir/CLAUDE.md")) 0
 Set-Content .factory/config.json '{"check": "exit 0", "specs": "docs/specs/"}' -Encoding ascii
 Expect "build: configured specs folder locked"  (Hook lock-specs (Edit "$dir/docs/specs/002-call.md")) 2
 Expect "build: default specs/ not locked then"  (Hook lock-specs (Edit "$dir/specs/notes.md")) 0
@@ -70,6 +74,16 @@ Expect "stopped build: stop hook lets Claude end" (Hook stop '{"stop_hook_active
 $notified = Join-Path (git rev-parse --git-common-dir) 'factory/notified.txt'
 Expect "stopped build: you are told once"      ((Get-Content $notified) -contains '001-cart:stopped') $true
 Expect "notify hook never blocks"              (Hook notify '{"message": "waiting"}') 0
+
+# Session start reminds you of context proposals that wait for your decision.
+function SessionStart { return ('{}' | & dotnet run $hooks -- session-start $PSScriptRoot 2>$null | Out-String) }
+Expect "session start: quiet without proposals" ((SessionStart) -match 'context proposal') $false
+$proposals = Join-Path (git rev-parse --git-common-dir) 'factory/context-proposals.jsonl'
+Set-Content $proposals ('{"id": 1, "status": "pending"}' + "`n" + '{"id": 2, "status": "rejected"}') -Encoding ascii
+$reminder = SessionStart
+Expect "session start: reminds of waiting proposals" ($reminder -match '1 context proposal') $true
+Expect "session start: reminder is valid JSON"  ((($reminder | ConvertFrom-Json).systemMessage) -match 'waiting') $true
+Remove-Item $proposals
 
 # Git-level guard: runs however the commit is started.
 SetBuilding $true

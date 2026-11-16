@@ -163,6 +163,7 @@
       "Bash(pip install *)",
       "Bash(uv add *)",
       "Bash(go get *)",
+      "Bash(dotnet run * proposal * --accept*)",
       "PowerShell(dotnet add package *)",
       "PowerShell(npm install *)",
       "PowerShell(npm i *)",
@@ -170,7 +171,8 @@
       "PowerShell(pnpm add *)",
       "PowerShell(pip install *)",
       "PowerShell(uv add *)",
-      "PowerShell(go get *)"
+      "PowerShell(go get *)",
+      "PowerShell(dotnet run * proposal * --accept*)"
     ]
   }
 }

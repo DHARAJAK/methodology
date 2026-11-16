@@ -10,7 +10,8 @@
 //   stop           when Claude wants to finish: refuses while /build has uncommitted tasks;
 //                  once a build has stopped or finished, tells you with a Windows notification (once)
 //   notify         Claude Code is waiting for you (Notification event): Windows notification
-//   session-start  sets METHODOLOGY_ROOT for the session
+//   session-start  sets METHODOLOGY_ROOT for the session; reminds you of context proposals waiting for you
+//   (lock-specs also locks .claude/ during /build: Claude proposes rule changes, it never makes them)
 //
 // Exit 2 = block; the message on stderr is shown to Claude so it can correct course.
 
@@ -28,6 +29,17 @@ if (args.Length > 1 && args[0] == "session-start")
     var envFile = Environment.GetEnvironmentVariable("CLAUDE_ENV_FILE");
     if (!string.IsNullOrEmpty(envFile))
         File.AppendAllText(envFile, $"export METHODOLOGY_ROOT=\"{args[1].Replace('\\', '/')}\"\n");
+    // Context proposals waiting for a decision: remind you at every session start, so none are forgotten.
+    var waiting = File.Exists(".factory/config.json") ? PendingProposals() : 0;
+    if (waiting > 0)
+    {
+        var text = $"{waiting} context proposal(s) for CLAUDE.md, rules or docs are waiting for you. Run /retro (or ask Claude to show them) to accept or reject each.";
+        Console.WriteLine(new JsonObject
+        {
+            ["systemMessage"] = text,
+            ["hookSpecificOutput"] = new JsonObject { ["hookEventName"] = "SessionStart", ["additionalContext"] = text + " Do not apply any of them without the user's yes." },
+        }.ToJsonString());
+    }
     return 0;
 }
 
@@ -67,6 +79,9 @@ switch (hook)
                 Block("The approved plan is locked during /build. If the plan is wrong, stop and tell the user to rerun /spec.");
             if (building && rel.StartsWith(".factory/"))
                 Block("Files in .factory/ belong to the factory script. Do not edit them; use the factory commands.");
+            // Claude's own rules and settings: during a build Claude may only propose changes (factory propose), never make them.
+            if (building && rel.StartsWith(".claude/"))
+                Block("Files in .claude/ (rules, agents, settings) cannot change during /build. Write a proposal instead: factory propose --file <note> (see the /build skill).");
             break;
         }
     case "no-raw-commit":
@@ -125,6 +140,21 @@ void Block(string message)
 {
     Console.Error.WriteLine(message);
     Environment.Exit(2);
+}
+
+// Context proposals still waiting for the user (factory propose), counted from the shared .git folder.
+int PendingProposals()
+{
+    try
+    {
+        var psi = new ProcessStartInfo("git", "rev-parse --git-common-dir") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        using var p = Process.Start(psi)!;
+        var file = Path.Combine(Path.GetFullPath(p.StandardOutput.ReadToEnd().Trim()), "factory", "context-proposals.jsonl");
+        p.WaitForExit();
+        if (!File.Exists(file)) return 0;
+        return File.ReadAllLines(file).Count(l => l.Trim() != "" && JsonNode.Parse(l)?["status"]?.GetValue<string>() == "pending");
+    }
+    catch { return 0; }
 }
 
 // True the first time a key is seen; keys are kept in the shared .git folder, so nothing shows up in git status.

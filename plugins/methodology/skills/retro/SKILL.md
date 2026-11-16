@@ -34,3 +34,11 @@ Ask the user to confirm or change the buckets, one question at a time.
 - Fill in the retro's `## Buckets` section with the lines from step 2.
 - Tell the user where the change will be made. A plugin change is a pull request to the methodology repo; a repo change is a small commit or `/spec` in this repo. Don't make the change in this conversation unless the user asks.
 - `factory report` later shows whether the number moved (`factory report --html` opens the same numbers as charts across builds). If it got worse after a few builds, the next retro reverts or replaces the change.
+
+## 5. Context proposals
+- Run `factory proposals`. If none are waiting, skip this step.
+- Show them one at a time: the file, the change, why, the evidence. Ask the user: accept or reject? Give your recommendation and one reason.
+- **Accept:** run `factory proposal <N> --accept`. Claude Code asks the user to approve that command: that prompt is their signature, so never work around it. Then make exactly the proposed change, nothing more.
+  - `CLAUDE.md`, `.claude/` or the spec template: put all accepted changes of this retro on ONE branch `harness/context-<YYYY-MM-DD>` from the base branch, commit them there (never on a feature branch), and tell the user to open the merge request for whoever approves harness changes in this repo.
+  - Other docs (for example the roadmap): commit on the current branch or with the next feature, as the user prefers.
+- **Reject:** `factory proposal <N> --reject "<the user's reason>"`.
