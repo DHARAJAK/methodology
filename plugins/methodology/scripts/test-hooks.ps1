@@ -85,6 +85,17 @@ SetBuilding $false
 Stage; git commit -qm normal 2>$null
 Expect "pre-commit: normal commit outside a build"   $LASTEXITCODE 0
 
+# Settings template: valid JSON, and every Bash rule has its PowerShell twin (Windows runs commands through PowerShell).
+$settings = Get-Content (Join-Path (Split-Path $PSScriptRoot) 'templates/settings.json') -Raw | ConvertFrom-Json
+foreach ($list in 'allow', 'deny', 'ask') {
+    $rules = @($settings.permissions.$list)
+    $missing = @($rules | Where-Object { $_ -like 'Bash(*' -and ($rules -notcontains ('PowerShell(' + $_.Substring(5))) })
+    Expect "settings: every $list Bash rule has a PowerShell twin" $missing.Count 0
+}
+$clash = @($settings.permissions.allow | Where-Object { $settings.permissions.deny -contains $_ })
+Expect "settings: no rule is both allowed and denied" $clash.Count 0
+Expect "settings: edits accepted without prompts" $settings.permissions.defaultMode 'acceptEdits'
+
 Pop-Location
 Remove-Item Env:CLAUDE_PROJECT_DIR
 Remove-Item Env:METHODOLOGY_NO_TOAST
