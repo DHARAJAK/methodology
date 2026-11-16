@@ -231,6 +231,19 @@ if ($onWindows) {
     ExpectOutput "report --html with older repeat tries" @('report', '--days', '30', '--html') 'Report page written'
 }
 
+# Context proposals: Claude proposes a change to CLAUDE.md or rules, with evidence; the user decides.
+Set-Content prop.txt "File: CLAUDE.md`nChange: status says the window exists`nWhy: it says not created`nSize: minor" -Encoding ascii
+Expect "a proposal without evidence is refused"  (F propose --file prop.txt) 1
+Add-Content prop.txt "Evidence: commit abc123" -Encoding ascii
+ExpectOutput "a proposal with evidence is saved"  @('propose', '--file', 'prop.txt') 'Proposal 1 saved'
+ExpectOutput "proposals counts the waiting ones"  @('proposals', '--count') '(?m)^\s*1\s*$'
+ExpectOutput "proposals lists it"                 @('proposals') 'Proposal 1 \(minor'
+ExpectOutput "accepting a CLAUDE.md change names a harness branch" @('proposal', '1', '--accept') 'harness/ branch'
+Expect "a decided proposal cannot be decided again" (F proposal 1 --reject "late") 1
+foreach ($i in 1..5) { & dotnet run .factory/factory.cs -- propose --file prop.txt 2>&1 | Out-Null }
+Expect "no more than 5 proposals wait at once"    (F propose --file prop.txt) 1
+ExpectOutput "rejecting one makes room"           @('proposal', '2', '--reject', 'not needed') 'Proposal 2 rejected'
+
 Pop-Location
 if ($bad -eq 0) { Write-Host "`nAll checks passed. Test repo left at $dir" -ForegroundColor Green }
 else { Write-Host "`n$bad check(s) failed. Test repo left at $dir; send me the output." -ForegroundColor Red }

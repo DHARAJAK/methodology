@@ -19,6 +19,9 @@
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- decide --bucket spec-gap --change "..." --metric first_pass_rate [--where plugin]
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- decide --none "reason"   (the retro decision; start waits for it)
 //   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- note "finding" | note --file f (adds to the newest retro, for the next /spec)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- propose --file f   (a change to CLAUDE.md, rules or docs, with evidence)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- proposals [--count] (the ones waiting for you)
+//   dotnet run "$METHODOLOGY_ROOT/scripts/factory.cs" -- proposal N --accept | --reject "reason" (accept always asks you)
 //
 // .factory/config.json: "check" (required), "reviewer" (agent name), "host" ("gitlab" | "github", default
 // from the origin URL), "base" (branch PRs/MRs target, default "main"), "specs" (plan folder, default
@@ -60,6 +63,9 @@ const string TextTaskWords = @"\b(pars(e|es|ed|er|ing)|redact\w*|mask\w*|saniti[
 const int MinInputRows = 5;
 string LoopMetricsPath = Path.Combine(LoopDir, "metrics.jsonl");
 string ImprovementsPath = Path.Combine(LoopDir, "improvements.jsonl");
+// Proposed changes to Claude's context files (CLAUDE.md, .claude/rules/, docs). Claude proposes, you decide.
+string ProposalsPath = Path.Combine(LoopDir, "context-proposals.jsonl");
+const int MaxPendingProposals = 5; // more than this and nobody reads them
 // Metrics where higher is better; for every other number lower is better.
 string[] HigherIsBetter = { "first_pass_rate", "done_when_coverage", "test_first_rate", "first_pass_rate_sonnet", "first_pass_rate_opus" };
 string[] Buckets = { "spec-gap", "harness-gap", "rule-gap", "model-slip" };
@@ -78,6 +84,9 @@ switch (args[0])
     case "finish": Finish(); break;
     case "open-pr": OpenPr(args.Contains("--dry-run")); break;
     case "note": if (args.Length < 2) Usage(); Note(NoteText()); break;
+    case "propose": if (args.Length < 2) Usage(); Propose(NoteText()); break;
+    case "proposals": Proposals(args.Contains("--count")); break;
+    case "proposal": if (args.Length < 3) Usage(); DecideProposal(args[1], args.Contains("--accept"), Option("--reject")); break;
     case "decide": Decide(Option("--bucket"), Option("--change"), Option("--metric"), Option("--where"), Option("--none"), Option("--feature")); break;
     case "stop": StopCommand(args.Length > 1 ? args[1] : "stopped by /build"); break;
     case "report": Report(int.TryParse(Option("--days") ?? (args.Length > 1 ? args[1] : ""), out var d) ? d : 14, args.Contains("--html")); break;
@@ -831,6 +840,76 @@ void Note(string text)
     Console.WriteLine($"Noted in {latest}");
 }
 
+// ---------- context proposals ----------
+// After a build or a session Claude may propose a change to a file that steers it (CLAUDE.md, .claude/rules/,
+// the spec template, the roadmap). It never edits those on its own: each proposal names the file, the change,
+// why, and the evidence, and waits here until you accept or reject it. The file lives in the shared .git folder,
+// so it survives branch switches and is never pushed.
+List<JsonNode> LoadProposals() =>
+    File.Exists(ProposalsPath)
+        ? File.ReadAllLines(ProposalsPath).Where(l => l.Trim() != "").Select(l => JsonNode.Parse(l)!).ToList()
+        : new List<JsonNode>();
+
+void SaveProposals(List<JsonNode> all)
+{
+    Directory.CreateDirectory(LoopDir);
+    File.WriteAllLines(ProposalsPath, all.Select(p => p.ToJsonString()));
+}
+
+string Field(string text, string name) =>
+    Regex.Match(text, $@"^\s*{name}\s*:\s*(.+)$", RegexOptions.Multiline | RegexOptions.IgnoreCase).Groups[1].Value.Trim();
+
+void Propose(string text)
+{
+    var file = Field(text, "File");
+    var size = Field(text, "Size").ToLowerInvariant();
+    var missing = new[] { "File", "Change", "Why", "Evidence", "Size" }.Where(f => Field(text, f) == "").ToList();
+    if (missing.Count > 0)
+        Die($"a proposal needs the lines File:, Change:, Why:, Evidence: and Size: (missing: {string.Join(", ", missing)}). " +
+            "Evidence is a commit, a test, a file and line, or the user's own words, never your own belief.");
+    if (size is not ("minor" or "significant")) Die("Size: must be minor (wording, facts) or significant (adds, changes or removes a rule).");
+    var all = LoadProposals();
+    var pending = all.Count(p => Str(p, "status") == "pending");
+    if (pending >= MaxPendingProposals)
+        Die($"{pending} proposals are already waiting. Keep only the most important: ask the user to accept or reject some first (factory proposals).");
+    var id = all.Count == 0 ? 1 : all.Max(p => p["id"]!.GetValue<int>()) + 1;
+    all.Add(new JsonObject
+    {
+        ["id"] = id, ["date"] = Now(), ["file"] = file, ["size"] = size, ["status"] = "pending",
+        ["branch"] = Git("rev-parse", "--abbrev-ref", "HEAD"), ["text"] = text.Replace("\r", ""),
+    });
+    SaveProposals(all);
+    Console.WriteLine($"Proposal {id} saved ({size}, {file}). It waits for the user; do not edit {file} now.");
+}
+
+void Proposals(bool countOnly)
+{
+    var pending = LoadProposals().Where(p => Str(p, "status") == "pending").ToList();
+    if (countOnly) { Console.WriteLine(pending.Count); return; }
+    if (pending.Count == 0) { Console.WriteLine("No context proposals waiting."); return; }
+    Console.WriteLine($"{pending.Count} context proposal(s) waiting for you:");
+    foreach (var p in pending)
+        Console.WriteLine($"\n### Proposal {p["id"]} ({Str(p, "size")}, {Str(p, "date")[..10]})\n{Str(p, "text")}");
+}
+
+void DecideProposal(string idText, bool accept, string? reject)
+{
+    if (accept == (reject != null)) Die("use exactly one of --accept or --reject \"reason\".");
+    var all = LoadProposals();
+    var p = all.FirstOrDefault(x => x["id"]!.GetValue<int>().ToString() == idText);
+    if (p == null) Die($"no proposal {idText}.");
+    if (Str(p!, "status") != "pending") Die($"proposal {idText} is already {Str(p!, "status")}.");
+    p!["status"] = accept ? "accepted" : "rejected";
+    p["decided"] = Now();
+    if (reject != null) p["reason"] = reject;
+    SaveProposals(all);
+    Console.WriteLine(accept
+        ? $"Proposal {idText} accepted. Now make exactly that change to {Str(p, "file")}" +
+          (Regex.IsMatch(Str(p, "file"), @"(^|/)(CLAUDE\.md|\.claude/)", RegexOptions.IgnoreCase)
+              ? " on a separate harness/ branch, not the feature branch (see the /retro skill)." : ".")
+        : $"Proposal {idText} rejected.");
+}
+
 // Records the retro decision: one change (bucket, what, which number should move) or none with a reason.
 void Decide(string? bucket, string? change, string? metric, string? place, string? none, string? feature)
 {
@@ -1221,7 +1300,7 @@ string? Option(string name)
 
 void Usage()
 {
-    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | task <task> | route <task> | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | report [--days N] [--html]");
+    Console.Error.WriteLine("usage: factory start <plan> | red <task> --test \"cmd\" | red <task> --skip \"reason\" | check <task> [--test \"cmd\"] | review <task> --pass | review <task> --fail \"findings\" | commit <task> [-m \"msg\"] | status | task <task> | route <task> | stop \"reason\" | finish | open-pr [--dry-run] | decide --bucket <b> --change \"what\" --metric <m> [--where w] | decide --none \"reason\" | note \"finding for the next spec\" | note --file <path> | note - (stdin) | propose --file <path> | proposals [--count] | proposal <N> --accept | proposal <N> --reject \"reason\" | report [--days N] [--html]");
     Environment.Exit(1);
 }
 

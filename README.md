@@ -20,7 +20,8 @@ Needs: git, the .NET 10 SDK (one that matches the repo's `global.json`, because 
    - **Bug:** failing test first, fix, check, PR.
    - **Medium:** plan mode, Ctrl+G to edit, build, check, PR.
    - **Feature:** `/spec <idea>`, approve, `/clear`, `/build specs/<file>` (or the `specs` folder set in `.factory/config.json`). The build runs to the end without asking you anything; you get one message (and a Windows notification) when the MR is ready or the build needs you. Then `/verify`, merge the MR yourself, and run `/retro`.
-4. After every build, `/retro` turns the worst problem into ONE change (`factory decide`). The next `/build` waits until that decision is recorded. `factory report` shows whether each change moved its number, and `factory report --days 30 --html` opens them as a page with a chart per number across builds. Label bugs found after merge `escaped`.
+4. Context stays true: after every build (and when you type `/wrap-up` after any other session) Claude saves up to 3 **context proposals** for `CLAUDE.md`, `.claude/rules/`, the spec template or the roadmap, each with evidence (`factory propose`). It never edits those files itself, and the hooks lock `.claude/` during a build. Every session start reminds you of the ones waiting; in `/retro` you accept or reject each, and accepting asks you to approve the command, so only you can say yes. Accepted harness changes go on one `harness/context-<date>` branch.
+5. After every build, `/retro` turns the worst problem into ONE change (`factory decide`). The next `/build` waits until that decision is recorded. `factory report` shows whether each change moved its number, and `factory report --days 30 --html` opens them as a page with a chart per number across builds. Label bugs found after merge `escaped`.
 
 If a skill name clashes with another plugin, use the full name, e.g. `/methodology:spec`.
 
@@ -30,7 +31,8 @@ If a skill name clashes with another plugin, use the full name, e.g. `/methodolo
 | `plugins/methodology/skills/onboard` | `/onboard`: check command, baseline, safety rules, secrets scan |
 | `plugins/methodology/skills/spec` | `/spec`: interview, glossary, plan with Given/When/Then, approval checklist |
 | `plugins/methodology/skills/build` | `/build`: one fresh subagent per task, referee, per-task project review, Code Evaluation, PR; one uninterrupted run |
-| `plugins/methodology/skills/retro` | `/retro`: sort what went wrong into a bucket, pick ONE change, record it with `factory decide` |
+| `plugins/methodology/skills/retro` | `/retro`: sort what went wrong into a bucket, pick ONE change, record it with `factory decide`; then accept or reject the waiting context proposals |
+| `plugins/methodology/skills/wrap-up` | `/wrap-up`: at the end of a session, propose up to 3 changes to CLAUDE.md, rules or docs, each with evidence (`/build` does this itself) |
 | `plugins/methodology/agents/implementer.md` | Builds one task, test first (proves the test fails with `factory red`) |
 | `plugins/methodology/scripts/factory.cs` | The referee: start (with plan checks and the retro gate), red, check, review, commit, status, stop, finish (writes the retro), open-pr, decide, report |
 | `plugins/methodology/scripts/hooks.cs` | Lock the plan, no raw commit, format `.cs`, no finishing with open tasks, Windows notification when a build ends or Claude waits |
