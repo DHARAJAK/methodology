@@ -185,6 +185,11 @@ if ($onWindows) {
     $retro = Join-Path (git rev-parse --git-common-dir) 'factory/retros/001-cart.md'
     Expect "finish wrote a retro"                (Test-Path $retro) $true
     Expect "retro keeps the review findings"     ((Get-Content $retro -Raw) -match 'event raised under lock') $true
+    Expect "retro shows where task time went"    ((Get-Content $retro -Raw) -match '\| In checks \| Longest gap \|') $true
+    $firstRow = Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/metrics.jsonl') | Select-Object -First 1 | ConvertFrom-Json
+    Expect "finish records minutes in checks"    ($null -ne $firstRow.check_minutes_per_task) $true
+    Expect "finish records the longest gap"      ($null -ne $firstRow.longest_gap_minutes) $true
+    ExpectOutput "report shows minutes in checks" @('report') 'of which in checks'
     Set-Content .factory/config.json '{"check": "./check.ps1"}' -Encoding ascii
     git add -A; git commit -qm "before next feature"
     Expect "start waits for the retro decision"  (F start specs/004-next.md) 1
