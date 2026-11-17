@@ -220,8 +220,11 @@ void Red(string taskId, string? testCmd, string? skipReason)
     }
     if (testCmd == null) Die("red needs --test \"<command for the new tests>\", or --skip \"<reason>\" for a task with no test.");
 
+    Touch(task);
+    var clock = Stopwatch.StartNew();
     var (code, _) = Shell(testCmd);
-    if (code == 0) Die("the tests passed before the code was written, so they do not test the new behaviour. Write a test that fails first.");
+    AddTestTime(task, clock);
+    if (code == 0) { Save(state); Die("the tests passed before the code was written, so they do not test the new behaviour. Write a test that fails first."); }
     task["red"] = new JsonObject { ["at"] = Now(), ["test"] = testCmd };
     Save(state);
     Console.WriteLine($"RED: task {taskId} has a failing test. Write the code, then run: factory check {taskId} --test \"{testCmd}\"");
@@ -237,10 +240,12 @@ void Check(string taskId, string? testCmd)
     if (task["red"] == null)
         Die($"task {taskId} has no failing test on record. Test first: run 'factory red {taskId} --test \"<cmd>\"' before writing code.");
     task["review"] = null;
+    Touch(task);
 
     var attempts = task["attempts"]!.GetValue<int>() + 1;
     task["started"] ??= Now();
     var config = LoadJson(ConfigPath, "Run /onboard first.");
+    var clock = Stopwatch.StartNew();
     FormatChangedFiles(config, state);
 
     var results = new List<(string Name, bool Ok, string Output)>();
@@ -252,6 +257,7 @@ void Check(string taskId, string? testCmd)
         task["has_test"] = true;
     }
     var (code, output) = Shell(Str(config, "check"));
+    AddTestTime(task, clock);
     if (code == 0)
         results.Add(("check", true, output));
     else
@@ -329,6 +335,7 @@ void Review(string taskId, bool pass, string? findings)
     var task = FindTask(state, taskId);
     if (Str(task, "status") != "passed") Die($"task {taskId} has not passed the check (status: {Str(task, "status")}). Review comes after a passing check.");
     if (!pass && findings == null) Die("review needs --pass, or --fail \"<findings>\".");
+    Touch(task);
 
     if (pass)
     {
@@ -355,6 +362,7 @@ void Commit(string taskId, string? message)
     var task = FindTask(state, taskId);
     if (Str(task, "status") != "passed")
         Die($"task {taskId} has not passed the check (status: {Str(task, "status")}). Refusing to commit.");
+    Touch(task);
     var reviewer = Str(LoadJson(ConfigPath, "Run /onboard first."), "reviewer");
     if (reviewer != "")
     {
@@ -478,6 +486,11 @@ void Finish()
         ["spec_to_pr_hours"] = Math.Round((DateTimeOffset.Now - specStart).TotalHours, 1),
         ["build_hours"] = Math.Round((DateTimeOffset.Now - DateTimeOffset.Parse(Str(state, "started"))).TotalHours, 1),
         ["minutes_per_task"] = taskMinutes.Count > 0 ? JsonValue.Create(Math.Round(taskMinutes.Average(), 0)) : null,
+        // Where the time went (from v0.1.22): minutes inside checks per task, and the longest gap between referee calls.
+        ["check_minutes_per_task"] = tried.Any(t => t["check_seconds"] != null)
+            ? JsonValue.Create(Math.Round(tried.Average(t => Num(t["check_seconds"])) / 60, 0)) : null,
+        ["longest_gap_minutes"] = tasks.Any(t => t["max_gap_minutes"] != null)
+            ? JsonValue.Create(Math.Round(tasks.Max(t => Num(t["max_gap_minutes"])), 0)) : null,
         ["same_goal_tries"] = state["same_goal_tries"]?.GetValue<int>() ?? 1,
         ["new_problems"] = newProblems,
         ["complexity_warnings"] = complexity,
@@ -612,6 +625,8 @@ void Report(int days, bool html)
         ("spec-to-PR (median)", $"{medianHours:0.0}h"),
         ("build hours (avg)", rows.Any(r => r["build_hours"] != null) ? $"{Avg("build_hours"):0.0}h" : "n/a (recorded from v0.1.12)"),
         ("minutes per task", rows.Any(r => r["minutes_per_task"] != null) ? $"{Avg("minutes_per_task"):0}" : "n/a (recorded from v0.1.12)"),
+        ("  of which in checks", rows.Any(r => r["check_minutes_per_task"] != null) ? $"{Avg("check_minutes_per_task"):0}" : "n/a (recorded from v0.1.22)"),
+        ("longest gap (avg per build)", rows.Any(r => r["longest_gap_minutes"] != null) ? $"{Avg("longest_gap_minutes"):0} min" : "n/a (recorded from v0.1.22)"),
         ("new problems", $"{Sum("new_problems")}"),
         ("complexity warnings", $"{Sum("complexity_warnings")}"),
         ("done-when coverage", $"{Avg("done_when_coverage"):P0}"),
@@ -680,7 +695,7 @@ List<(string Change, string Metric, double? Before, double? After, int Builds, s
 }
 
 // A JSON number as a double, whether it was read from a file or set in memory as an int (GetValue<double> throws on the latter).
-double Num(JsonNode n) => double.Parse(n.ToJsonString(), System.Globalization.CultureInfo.InvariantCulture);
+double Num(JsonNode? n) => n == null ? 0 : double.Parse(n.ToJsonString(), System.Globalization.CultureInfo.InvariantCulture);
 
 // One self-contained page: summary numbers, a bar chart per number across builds, every build, every retro change.
 string HtmlReport(int days, List<JsonNode> rows, List<(string Name, string Value)> lines,
@@ -708,7 +723,8 @@ string HtmlReport(int days, List<JsonNode> rows, List<(string Name, string Value
     {
         ("needs_you", "Stopped for you (1 = stopped)"), ("first_pass_rate", "First-pass rate (higher is better)"),
         ("attempts_per_task", "Attempts per task (1.0 is best)"), ("build_hours", "Build hours"),
-        ("minutes_per_task", "Minutes per task"), ("review_findings", "Review findings"),
+        ("minutes_per_task", "Minutes per task"), ("check_minutes_per_task", "Minutes in checks per task"),
+        ("longest_gap_minutes", "Longest gap without a referee call (minutes)"), ("review_findings", "Review findings"),
         ("same_goal_tries", "Try number at the same goal"), ("tokens_total", "Tokens per build"),
     };
     h.AppendLine("<h2>Across builds (oldest to newest)</h2><div class=\"grid\">");
@@ -738,7 +754,7 @@ string HtmlReport(int days, List<JsonNode> rows, List<(string Name, string Value
     }
     h.AppendLine("</div>");
 
-    var cols = new[] { "date", "tasks", "tasks_reached", "tasks_committed", "needs_you", "first_pass_rate", "attempts_per_task", "build_hours", "minutes_per_task", "review_findings", "same_goal_tries", "tokens_total" };
+    var cols = new[] { "date", "tasks", "tasks_reached", "tasks_committed", "needs_you", "first_pass_rate", "attempts_per_task", "build_hours", "minutes_per_task", "check_minutes_per_task", "longest_gap_minutes", "review_findings", "same_goal_tries", "tokens_total" };
     h.AppendLine("<h2>Every build</h2><div class=\"card wrap\"><table><tr><th>feature</th>" + string.Join("", cols.Select(c => $"<th>{c.Replace('_', ' ')}</th>")) + "</tr>");
     foreach (var r in rows)
     {
@@ -1021,6 +1037,7 @@ void RouteCommand(string taskId)
     var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
     var config = LoadJson(ConfigPath, "Run /onboard first.");
     var task = FindTask(state, taskId);
+    Touch(task);
     var (model, effort, why) = Route(config, task, TaskText(state, taskId));
     var attempt = task["attempts"]!.GetValue<int>() + 1;
     var routes = task["routes"] as JsonObject ?? new JsonObject();
@@ -1031,6 +1048,29 @@ void RouteCommand(string taskId)
     if (effort != null) Console.WriteLine($"effort: {effort}");
     Console.WriteLine($"why: {why} (attempt {attempt})");
 }
+
+// Where a task's time goes. The check (tests) is timed; every other referee call marks the task as active, so the
+// longest gap between two calls shows an implementer that was stuck, or a build waiting (a prompt, a sleeping laptop).
+void Touch(JsonNode task)
+{
+    if (task["last_seen"] != null)
+    {
+        var gap = Math.Round((DateTimeOffset.Now - DateTimeOffset.Parse(Str(task, "last_seen"))).TotalMinutes, 1);
+        if (gap > Num(task["max_gap_minutes"])) task["max_gap_minutes"] = gap;
+    }
+    task["last_seen"] = Now();
+}
+
+// Time spent in tests does not count as a gap: the clock restarts when the check ends.
+void AddTestTime(JsonNode task, Stopwatch clock)
+{
+    task["check_seconds"] = Math.Round(Num(task["check_seconds"]) + clock.Elapsed.TotalSeconds, 0);
+    task["last_seen"] = Now();
+}
+
+double TaskMinutes(JsonNode t) =>
+    t["started"] == null ? 0
+    : ((t["ended"] != null ? DateTimeOffset.Parse(Str(t, "ended")) : DateTimeOffset.Now) - DateTimeOffset.Parse(Str(t, "started"))).TotalMinutes;
 
 void Status()
 {
@@ -1169,11 +1209,27 @@ string WriteRetro(JsonNode state, JsonObject metrics, bool stopped, List<string>
     md.AppendLine($"Outcome: {(stopped ? $"STOPPED: {Str(state, "stop_reason")}" : "finished, merge request ready")}");
     md.AppendLine($"Date: {DateTimeOffset.Now:yyyy-MM-dd} · Plan: `{Str(state, "plan")}` · Branch: `{Str(state, "branch")}`");
     md.AppendLine($"Numbers: first try {metrics["first_pass_rate"]} · attempts per task {metrics["attempts_per_task"]} · review findings {metrics["review_findings"]} · new problems {metrics["new_problems"]}");
-    md.AppendLine().AppendLine("## Tasks").AppendLine().AppendLine("| Task | Status | Attempts | Test first |").AppendLine("|---|---|---|---|");
+    md.AppendLine().AppendLine("## Tasks").AppendLine().AppendLine("| Task | Status | Attempts | Test first | Minutes | In checks | Longest gap |").AppendLine("|---|---|---|---|---|---|---|");
     foreach (var t in tasks)
     {
         var red = t["red"] == null ? "no" : t["red"]!["skipped"] != null ? $"skipped ({Str(t["red"]!, "skipped")})" : "yes";
-        md.AppendLine($"| {Str(t, "id")}: {Str(t, "name")} | {Str(t, "status")} | {t["attempts"]} | {red} |");
+        md.AppendLine($"| {Str(t, "id")}: {Str(t, "name")} | {Str(t, "status")} | {t["attempts"]} | {red} | {TaskMinutes(t):0} | {Num(t["check_seconds"]) / 60:0} | {Num(t["max_gap_minutes"]):0} |");
+    }
+    // A task over an hour: say where the time went, so the retro can fix the right thing.
+    var slow = tasks.Where(t => TaskMinutes(t) > 60).ToList();
+    if (slow.Count > 0)
+    {
+        md.AppendLine().AppendLine("## Slow tasks").AppendLine();
+        foreach (var t in slow)
+        {
+            double total = TaskMinutes(t), inChecks = Num(t["check_seconds"]) / 60, gap = Num(t["max_gap_minutes"]);
+            var why = inChecks > total / 2
+                ? "mostly tests: speed up the check (run only this task's tests in the done-when command, or move slow tests out of the default check)"
+                : gap > 30
+                    ? "a long gap with no referee call: the implementer was stuck, or the build was waiting (a permission prompt, the laptop asleep)"
+                    : "spread over many steps: the task may be too big; split it in /spec";
+            md.AppendLine($"- Task {Str(t, "id")}: {total:0} min, {inChecks:0} in checks, longest gap {gap:0} min. Likely {why}.");
+        }
     }
     md.AppendLine().AppendLine("## Evidence").AppendLine();
     var evidence = 0;
