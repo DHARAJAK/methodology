@@ -1056,7 +1056,8 @@ void Touch(JsonNode task)
     if (task["last_seen"] != null)
     {
         var gap = Math.Round((DateTimeOffset.Now - DateTimeOffset.Parse(Str(task, "last_seen"))).TotalMinutes, 1);
-        if (gap > Num(task["max_gap_minutes"])) task["max_gap_minutes"] = gap;
+        // The first gap is always recorded (even 0), so a task with two referee calls never reports "no gap".
+        if (task["max_gap_minutes"] == null || gap > Num(task["max_gap_minutes"])) task["max_gap_minutes"] = gap;
     }
     task["last_seen"] = Now();
 }
