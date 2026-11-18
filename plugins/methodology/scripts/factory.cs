@@ -502,6 +502,9 @@ void Finish()
         ["attempts_opus"] = tried.Sum(t => AttemptsOn(t, "opus")),
         ["first_pass_rate_sonnet"] = FirstPassOn(tried, "sonnet"),
         ["first_pass_rate_opus"] = FirstPassOn(tried, "opus"),
+        // Fable only runs as the last try, so count the tasks it rescued instead of a first-pass rate.
+        ["attempts_fable"] = tried.Sum(t => AttemptsOn(t, "fable")),
+        ["passed_on_fable"] = committed.Count(t => ((t["routes"] as JsonObject)?[t["attempts"]!.GetValue<int>().ToString()]?.GetValue<string>() ?? "").Contains("fable", StringComparison.OrdinalIgnoreCase)),
         ["secrets_caught"] = state["secrets_caught"]?.GetValue<int>() ?? 0,
         ["unapproved_deps"] = unapproved.Count,
         ["tokens_total"] = tokensTotal,
@@ -641,7 +644,8 @@ void Report(int days, bool html)
     if (rows.Any(r => r["attempts_sonnet"] != null))
     {
         string Rate(string k) => rows.Any(r => r[k] != null) ? $"{Avg(k):P0}" : "n/a";
-        lines.Add(("by model", $"Sonnet: {Sum("attempts_sonnet")} attempts, first pass {Rate("first_pass_rate_sonnet")} · Opus: {Sum("attempts_opus")} attempts, first pass {Rate("first_pass_rate_opus")}"));
+        lines.Add(("by model", $"Sonnet: {Sum("attempts_sonnet")} attempts, first pass {Rate("first_pass_rate_sonnet")} · Opus: {Sum("attempts_opus")} attempts, first pass {Rate("first_pass_rate_opus")}"
+            + (rows.Any(r => r["attempts_fable"] != null && Num(r["attempts_fable"]) > 0) ? $" · Fable: {Sum("attempts_fable")} attempts, {Sum("passed_on_fable")} tasks passed on Fable" : "")));
     }
     var changes = Improvements(metricsFile);
 
@@ -998,7 +1002,9 @@ void TaskBrief(string taskId)
 }
 
 // Model routing: the plan's own task text decides how hard the task is, so the choice is the same every run.
-// Levels: 0 small (Sonnet, medium effort), 1 medium (Sonnet, high), 2 large (Opus, high), 3 (Opus, xhigh).
+// Levels: 0 small (Sonnet, medium effort), 1 medium (Sonnet, high), 2 large (Opus, high), 3 last try (Fable, high).
+// Level 3 is only reached after a failed attempt; "fable": false in .factory/config.json uses Opus, xhigh instead
+// (for plans without Fable). Fable runs at high, not xhigh: xhigh costs about 4x more for no measured gain.
 // Each real failed attempt moves the next implementer one level up. "models": {"implementer": ...} in
 // .factory/config.json fixes the model; "model_routing": false turns sizing off (Sonnet, no effort set).
 (string Model, string? Effort, string Why) Route(JsonNode config, JsonNode task, string taskText)
@@ -1029,7 +1035,8 @@ void TaskBrief(string taskId)
     var size = new[] { "small", "medium", "large" }[level];
     var failed = task["attempts"]!.GetValue<int>();
     if (failed > 0) { level = Math.Min(3, level + failed); why.Add($"after {failed} failed attempt(s)"); }
-    var (model, effort) = level switch { 0 => ("sonnet", "medium"), 1 => ("sonnet", "high"), 2 => ("opus", "high"), _ => ("opus", "xhigh") };
+    var noFable = config["fable"] is JsonValue nf && nf.GetValueKind() == JsonValueKind.False;
+    var (model, effort) = level switch { 0 => ("sonnet", "medium"), 1 => ("sonnet", "high"), 2 => ("opus", "high"), _ => noFable ? ("opus", "xhigh") : ("fable", "high") };
     if (fixedModel != null) { model = fixedModel; why.Add("model fixed in .factory/config.json"); }
     return (model, effort, $"{size} task{(why.Count > 0 ? ": " + string.Join(", ", why) : "")}");
 }
