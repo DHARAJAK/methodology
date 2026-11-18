@@ -639,7 +639,7 @@ void Report(int days, bool html)
         ("tokens per feature", $"{Avg("tokens_total"):N0} (output {Avg("tokens_output"):N0})"),
     };
     if (rows.Any(r => r["attempts_sonnet"] != null))
-            {
+    {
         string Rate(string k) => rows.Any(r => r[k] != null) ? $"{Avg(k):P0}" : "n/a";
         lines.Add(("by model", $"Sonnet: {Sum("attempts_sonnet")} attempts, first pass {Rate("first_pass_rate_sonnet")} · Opus: {Sum("attempts_opus")} attempts, first pass {Rate("first_pass_rate_opus")}"));
     }
@@ -891,8 +891,13 @@ void Propose(string text)
     var id = all.Count == 0 ? 1 : all.Max(p => p["id"]!.GetValue<int>()) + 1;
     all.Add(new JsonObject
     {
-        ["id"] = id, ["date"] = Now(), ["file"] = file, ["size"] = size, ["status"] = "pending",
-        ["branch"] = Git("rev-parse", "--abbrev-ref", "HEAD"), ["text"] = text.Replace("\r", ""),
+        ["id"] = id,
+        ["date"] = Now(),
+        ["file"] = file,
+        ["size"] = size,
+        ["status"] = "pending",
+        ["branch"] = Git("rev-parse", "--abbrev-ref", "HEAD"),
+        ["text"] = text.Replace("\r", ""),
     });
     SaveProposals(all);
     Console.WriteLine($"Proposal {id} saved ({size}, {file}). It waits for the user; do not edit {file} now.");
@@ -967,8 +972,10 @@ void Decide(string? bucket, string? change, string? metric, string? place, strin
     Console.WriteLine("The next build can start. 'factory report' will show whether the number moved.");
 }
 
-// The part of the plan one task needs: the shared sections plus that task, never the other tasks,
-// assumptions or checklist. Each implementer and reviewer reads this instead of the whole plan.
+// The part of the plan one task needs: the shared sections, that task and the plan's Assumptions,
+// never the other tasks or checklist. Assumptions are included because plans put behaviour there
+// (062: "the Filter resets to All after sign-out"), which implementers missed when it was left out.
+// Each implementer and reviewer reads this instead of the whole plan.
 void TaskBrief(string taskId)
 {
     var state = LoadJson(StatePath, "Run 'factory start <plan>' first.");
@@ -985,6 +992,8 @@ void TaskBrief(string taskId)
     foreach (var h in new[] { "Goal", "Glossary", "Scope", "Out of scope", "Differences from existing behaviour", "Design" }) sb.Append(Section(h));
     sb.AppendLine(task.Value.TrimEnd());
     if (Regex.IsMatch(task.Value, @"Scenario:\s*End-to-end", RegexOptions.IgnoreCase)) sb.AppendLine().Append(Section("End-to-end check"));
+    var assumptions = Section("Assumptions");
+    if (assumptions != "") sb.AppendLine().Append(assumptions);
     Console.WriteLine(sb.ToString().TrimEnd());
 }
 
