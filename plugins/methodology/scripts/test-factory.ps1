@@ -96,7 +96,13 @@ Expect "red can be skipped with a reason"    (F red 2 --skip "no behaviour to te
 Expect "new error fails (attempt 1)"         (F check 2) 1
 ExpectOutput "a failed attempt moves the next one up" @('route', '2') 'effort: high'
 Expect "new error fails (attempt 2)"         (F check 2) 1
+ExpectOutput "two failures move a small task to Opus" @('route', '2') 'model: opus\s+effort: high'
 Expect "STOP after 3 failures"               (F check 2) 2
+ExpectOutput "the last try runs on Fable at high effort" @('route', '2') 'model: fable\s+effort: high'
+$cfgText = Get-Content .factory/config.json -Raw
+Set-Content .factory/config.json ($cfgText.Trim().TrimEnd('}') + ', "fable": false}') -Encoding ascii
+ExpectOutput '"fable": false keeps the last try on Opus xhigh' @('route', '2') 'model: opus\s+effort: xhigh'
+git checkout -q -- .factory/config.json
 
 Remove-Item BAD
 git switch -q main
