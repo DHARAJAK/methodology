@@ -27,11 +27,16 @@ Set-Content .factory/baseline.txt 'old: error in legacy.cs line 12' -Encoding as
 Set-Content .gitignore ".factory/state.json`n.factory/last-check.txt" -Encoding ascii
 # A plan that passes the plan checks (ADR-016): glossary, differences section, tricky inputs per task.
 $good = "Status: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items picked, not paid |`n## Differences from existing behaviour`nnone`n## Tasks"
-Set-Content specs/001-cart.md "# Plan: cart`n$good`n### Task 1: add button`nTricky inputs: none (test)`n### Task 2: show total`nTricky inputs: none (test)" -Encoding ascii
+Set-Content specs/001-cart.md "# Plan: cart`n$good`n### Task 1: add button`nTricky inputs: none (test)`nGap checklist: none (test)`n### Task 2: show total`nTricky inputs: none (test)`nGap checklist: none (test)" -Encoding ascii
 # A plan with the gaps the checks catch: no tricky inputs, no differences section, a file that does not exist.
 Set-Content specs/002-gaps.md "# Plan: gaps`nStatus: Approved 2026-10-23`n## Glossary`n| Term | Meaning |`n|---|---|`n| Cart | items |`n## Tasks`n### Task 1: roadmap`nUpdate ``docs/ROADMAP.md```nOut of scope: moving it to a ``harness/`` branch`n### Task 2: mask passwords`nScenario: Tricky: spaces`n| Input | Output |`n|---|---|`n| a | b |`n## End-to-end check`nGiven a cart When paid Then a receipt" -Encoding ascii
 $table = "| Input | Output |`n|---|---|`n| ``SAVE10`` | 10% |`n| ``save10`` | 10% |`n| `` SAVE10 `` | 10% |`n| ``SAVE1O`` | invalid |`n| (empty) | invalid |"
-Set-Content specs/004-next.md "# Plan: next`n$good`n### Task 1: tricky`nScenario: Tricky: empty cart`n### Task 2: parse coupon codes`nScenario: Tricky: lower case`n$table`nScenario: End-to-end: pay with a coupon`n## End-to-end check`nGiven a coupon When paid Then 10% off" -Encoding ascii
+# The gap checklist (v0.1.26): every case answered, n/a with a reason, one Tricky scenario per case that applies.
+$gaps = "| Case | What happens |`n|---|---|`n| Interrupted | n/a (pure function) |`n| Two at once | n/a (no shared state) |`n| Slow or down | n/a (no service) |`n| Old data | n/a (codes are not stored) |`n| Session ends | n/a (no session) |`n| Who else uses it | n/a (new file) |`n| Typed input | the user types the code; see the table |"
+# A checklist with every kind of gap: rows missing, n/a without a reason, an unanswered row, more cases than Tricky scenarios, an open decision.
+$badGaps = "| Case | What happens |`n|---|---|`n| Interrupted | the dialog closes: nothing is saved |`n| Two at once | n/a |`n| Slow or down | <what happens> |`n| Old data | the saved code is checked again |"
+Set-Content specs/007-gapcheck.md "# Plan: gapcheck`n$good`n### Task 1: no list`nScenario: Tricky: empty`n### Task 2: half a list`nScenario: Tricky: closed`n$badGaps`nRefund rule: NEEDS DECISION (full or partial?)" -Encoding ascii
+Set-Content specs/004-next.md "# Plan: next`n$good`n### Task 1: tricky`nScenario: Tricky: empty cart`nGap checklist: none (test)`n### Task 2: parse coupon codes`nScenario: Tricky: lower case`n$gaps`n$table`nScenario: End-to-end: pay with a coupon`n## End-to-end check`nGiven a coupon When paid Then 10% off" -Encoding ascii
 New-Item -ItemType Directory docs | Out-Null
 Copy-Item specs/001-cart.md docs/001-cart.md
 git add -A; git commit -qm init
@@ -67,6 +72,13 @@ Expect "a branch name is not a missing path"  ($gapsOut -match 'mentions harness
 ExpectOutput "asks for the differences section" @('start', 'specs/002-gaps.md') 'Differences from existing behaviour'
 ExpectOutput "asks for an input/output table"  @('start', 'specs/002-gaps.md') 'Task 2 parses or transforms text'
 ExpectOutput "asks a task to own the end-to-end check" @('start', 'specs/002-gaps.md') 'No task owns the end-to-end check'
+Expect "refuses a plan with checklist gaps"  (F start specs/007-gapcheck.md) 1
+ExpectOutput "asks for a gap checklist"       @('start', 'specs/007-gapcheck.md') 'Task 1 has no gap checklist'
+ExpectOutput "names the missing checklist rows" @('start', 'specs/007-gapcheck.md') 'no row for: Session ends, Who else uses it, Typed input'
+ExpectOutput "n/a needs a reason"             @('start', 'specs/007-gapcheck.md') 'Two at once" is n/a without a reason'
+ExpectOutput "an unanswered row is a gap"     @('start', 'specs/007-gapcheck.md') 'Slow or down" has no answer'
+ExpectOutput "each case that applies needs a Tricky scenario" @('start', 'specs/007-gapcheck.md') '2 gap-checklist case\(s\) apply but there are only 1'
+ExpectOutput "refuses an open NEEDS DECISION" @('start', 'specs/007-gapcheck.md') '1 NEEDS DECISION mark'
 Set-Content draft.md 'old notes, not part of the feature'
 Expect "start creates the branch (@path too)" (F start '@specs/001-cart.md') 0
 ExpectOutput "task prints its own task"     @('task', '1') 'Task 1: add button'
@@ -232,10 +244,10 @@ if ($onWindows) {
     Expect "quotes survive in a note"            ((Get-Content (Join-Path (git rev-parse --git-common-dir) 'factory/retros/004-next.md') -Raw).Contains('{\"password\":\"x\"}')) $true
     Remove-Item note.txt
     Set-Content .factory/config.json '{"check": "./check.ps1", "base": "main"}' -Encoding ascii
-    Set-Content specs/005-follow.md "# Plan: follow`n$good`n### Task 1: fix`nTricky inputs: none (test)" -Encoding ascii
+    Set-Content specs/005-follow.md "# Plan: follow`n$good`n### Task 1: fix`nTricky inputs: none (test)`nGap checklist: none (test)" -Encoding ascii
     git add -A; git commit -qm "follow-up plan"
     Expect "follow-up builds on the stopped branch" (F start specs/005-follow.md) 0
-    Set-Content specs/006-follow-again.md "# Plan: Follow, after the stopped 005 build`n$good`n### Task 1: fix again`nTricky inputs: none (test)" -Encoding ascii
+    Set-Content specs/006-follow-again.md "# Plan: Follow, after the stopped 005 build`n$good`n### Task 1: fix again`nTricky inputs: none (test)`nGap checklist: none (test)" -Encoding ascii
     git add -A; git commit -qm "same goal again"
     ExpectOutput "warns about a repeated goal"   @('start', 'specs/006-follow-again.md') 'try 2 at the same goal'
     # Builds recorded before v0.1.12 have no try number: report works it out from the plans in the specs folder.

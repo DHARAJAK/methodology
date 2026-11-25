@@ -61,6 +61,10 @@ string LoopDir = Path.Combine(Path.GetFullPath(Git("rev-parse", "--git-common-di
 string RetroDir = Path.Combine(LoopDir, "retros");
 const string TextTaskWords = @"\b(pars(e|es|ed|er|ing)|redact\w*|mask\w*|saniti[sz]\w*|escap\w*|normali[sz]\w*|validat\w*|regex\w*|deserializ\w*)\b";
 const int MinInputRows = 5;
+// The gap checklist every task answers in /spec (v0.1.26). Almost every spec gap in the retros was one of these:
+// something interrupted or overlapping, a slow or missing service, data saved before the change, a session ending,
+// another file that depends on what the task changes, or typed text. One list instead of a new rule per retro.
+string[] GapCases = { "Interrupted", "Two at once", "Slow or down", "Old data", "Session ends", "Who else uses it", "Typed input" };
 string LoopMetricsPath = Path.Combine(LoopDir, "metrics.jsonl");
 string ImprovementsPath = Path.Combine(LoopDir, "improvements.jsonl");
 // Proposed changes to Claude's context files (CLAUDE.md, .claude/rules/, docs). Claude proposes, you decide.
@@ -1300,6 +1304,7 @@ List<string> PlanProblems(string text)
         if (!Regex.IsMatch(section, @"Scenario:\s*Tricky\b", RegexOptions.IgnoreCase)
             && !Regex.IsMatch(section, @"Tricky inputs:\s*none\s*\(.+\)", RegexOptions.IgnoreCase))
             problems.Add($"Task {taskHeads[i].Groups[1].Value} has no \"Scenario: Tricky ...\" and no \"Tricky inputs: none (reason)\" line.");
+        problems.AddRange(GapChecklistProblems(taskHeads[i].Groups[1].Value, section));
         // A task that parses, masks or checks text gets an exact input -> output table: a few loose scenarios let
         // reviewers find the next leak one attempt at a time (retro 002, log masking).
         if (Regex.IsMatch(section, TextTaskWords, RegexOptions.IgnoreCase)
@@ -1307,6 +1312,11 @@ List<string> PlanProblems(string text)
             && !Regex.IsMatch(section, @"Input table:\s*none\s*\(.+\)", RegexOptions.IgnoreCase))
             problems.Add($"Task {taskHeads[i].Groups[1].Value} parses or transforms text but has no input -> output table with at least {MinInputRows} rows (| Input | Output |), and no \"Input table: none (reason)\" line.");
     }
+
+    // 1a. Nothing is left open: /spec marks an unanswered question NEEDS DECISION, and the build never guesses it.
+    var open = Regex.Matches(text, @"NEEDS DECISION").Count;
+    if (open > 0)
+        problems.Add($"The plan still has {open} NEEDS DECISION mark(s). Answer each one in /spec (or move it to Out of scope) and approve again.");
 
     // 1b. The end-to-end check belongs to a task, so it gets a test instead of being left to /verify.
     var e2e = Regex.Match(text, @"^##\s*End-to-end check\s*$(.*?)(?=^## |\z)", RegexOptions.Multiline | RegexOptions.Singleline);
@@ -1343,6 +1353,44 @@ List<string> PlanProblems(string text)
     }
     foreach (var p in missing)
         problems.Add($"The plan mentions {p}, which does not exist. Create it, add it to a task's Files line, or mark the line (new).");
+    return problems;
+}
+
+// Every task answers each gap case: what happens, or "n/a (reason)". Each case that applies needs its own
+// Tricky scenario, so it gets a test. A task with nothing to go wrong (docs only) says "Gap checklist: none (reason)".
+List<string> GapChecklistProblems(string id, string section)
+{
+    var problems = new List<string>();
+    if (Regex.IsMatch(section, @"Gap checklist:\s*none\s*\(.+\)", RegexOptions.IgnoreCase)) return problems;
+    var rows = section.Replace("\r\n", "\n").Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith('|'))
+        .Select(l => l.Trim('|').Split('|').Select(c => c.Trim()).ToArray()).Where(c => c.Length >= 2).ToList();
+    var missing = new List<string>();
+    var applies = 0;
+    foreach (var gap in GapCases)
+    {
+        var row = rows.FirstOrDefault(c => c[0].StartsWith(gap, StringComparison.OrdinalIgnoreCase));
+        if (row == null) { missing.Add(gap); continue; }
+        var answer = row[1];
+        if (answer == "" || Regex.IsMatch(answer, @"^<.*>$") || answer.Contains("NEEDS DECISION"))
+            problems.Add($"Task {id} gap checklist: \"{gap}\" has no answer. Say what happens, or \"n/a (reason)\".");
+        else if (Regex.IsMatch(answer, @"^n/?a\b", RegexOptions.IgnoreCase))
+        {
+            if (!Regex.IsMatch(answer, @"\(.+\)")) problems.Add($"Task {id} gap checklist: \"{gap}\" is n/a without a reason. Write \"n/a (reason)\".");
+        }
+        else
+        {
+            applies++;
+            if (gap == "Typed input" && InputTableRows(section) < MinInputRows && !Regex.IsMatch(section, @"Input table:\s*none\s*\(.+\)", RegexOptions.IgnoreCase))
+                problems.Add($"Task {id} takes typed input but has no input -> output table with at least {MinInputRows} rows (| Input | Output |).");
+        }
+    }
+    if (missing.Count == GapCases.Length)
+        problems.Add($"Task {id} has no gap checklist (| Case | What happens | with rows {string.Join(", ", GapCases)}), and no \"Gap checklist: none (reason)\" line.");
+    else if (missing.Count > 0)
+        problems.Add($"Task {id} gap checklist has no row for: {string.Join(", ", missing)}.");
+    var tricky = Regex.Matches(section, @"Scenario:\s*Tricky\b", RegexOptions.IgnoreCase).Count;
+    if (applies > tricky)
+        problems.Add($"Task {id}: {applies} gap-checklist case(s) apply but there are only {tricky} \"Scenario: Tricky\" line(s). Give each case that applies its own Tricky scenario, so it gets a test.");
     return problems;
 }
 

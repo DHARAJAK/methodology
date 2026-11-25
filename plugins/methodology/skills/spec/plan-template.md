@@ -38,6 +38,16 @@ Spec number: <NNN>
   Then <what must happen>
   ```
   (Only for a task with no awkward input at all, such as docs only: replace the Tricky scenario with a line "Tricky inputs: none" followed by the reason in brackets.)
+- **Gap checklist** (every row answered, or `n/a (reason)`; each row that applies gets its own `Scenario: Tricky:` above. Docs-only task: one line "Gap checklist: none" and the reason in brackets):
+  | Case | What happens |
+  |---|---|
+  | Interrupted | <cancel, window closes, sign out or call ends mid-way: what happens> |
+  | Two at once | <double press, two requests in flight, older answer last: which wins> |
+  | Slow or down | <server, network, device or line slow or failing: what the user sees> |
+  | Old data | <values saved before this change: how they are read or migrated> |
+  | Session ends | <login expires or role changes mid-flow: what is cleared> |
+  | Who else uses it | <files, tests, docs that use what this task changes, renames or deletes> |
+  | Typed input | <text the user types: see the input -> output table> |
 - **Input → output** (only for a task that parses, masks, redacts, escapes, normalizes or validates text; at least 5 rows from the adversarial pass, each one exact):
   | Input | Output |
   |---|---|
@@ -56,7 +66,7 @@ Spec number: <NNN>
 <one Given/When/Then scenario for the whole feature. A task repeats it as "Scenario: End-to-end:", so it gets a test>
 
 ## Assumptions
-<anything still assumed after the interview, or "none">
+<what Claude assumed from the code and the user confirmed, and anything the user left to Claude ("Claude chose X because Y"); or "none">
 
 ## Approval checklist
 - [ ] The goal is clear in 2-3 lines.
@@ -68,6 +78,9 @@ Spec number: <NNN>
 - [ ] New dependencies are listed (or "none").
 - [ ] Decisions needing an ADR are listed (or "none").
 - [ ] Every task has a `Scenario: Tricky:` for its most awkward input, or `Tricky inputs: none (reason)`.
+- [ ] Every task's gap checklist has all 7 rows answered (or `n/a (reason)`), and each row that applies has its own Tricky scenario.
+- [ ] Nothing is left open: every question is answered, written as an assumption, or moved to Out of scope.
+- [ ] A fresh edge-case reviewer read the plan, and its real findings are in.
 - [ ] Every file the plan mentions exists, is in a task's Files line, or is marked (new).
 - [ ] Differences from existing behaviour are listed (or "none").
 - [ ] If behaviour or structure changes (a new project, folder or package), a task updates `CLAUDE.md` and the docs that describe it. `factory finish` refuses a new project, folder or package that CLAUDE.md doesn't mention.
