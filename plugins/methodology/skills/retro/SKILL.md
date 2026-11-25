@@ -16,7 +16,7 @@ The referee is `dotnet run "${CLAUDE_PLUGIN_ROOT}/scripts/factory.cs" -- <comman
 
 ## 2. Sort each problem into ONE bucket
 List every problem from the Evidence section, one line each, with the bucket you suggest and why:
-- **spec-gap:** the plan didn't say something it needed to (an edge case, an order of steps, a term, a doc to update). Fix it in the plan template, or better, in a referee plan check.
+- **spec-gap:** the plan didn't say something it needed to (an edge case, an order of steps, a term, a doc to update). Fix it in the plan template, or better, in a referee plan check. First check whether it fits one of the 7 gap-checklist cases in `/spec` (interrupted, two at once, slow or down, old data, session ends, who else uses it, typed input): if it does, the fix is a better example or question for that case, not a new narrow rule. Add an 8th case only when a gap fits none of them.
 - **harness-gap:** the referee, a hook or a setting let something through, or blocked something wrongly. Fix it in the plugin.
 - **rule-gap:** `CLAUDE.md` or `.claude/rules` is wrong or out of date. Fix it in this repo.
 - **model-slip:** the rules were clear and were ignored. Turn the rule into a check (hook or referee), never into a louder sentence.
